@@ -146,6 +146,25 @@ check 'detached conflict restores detached state' rejects git symbolic-ref --qui
 check 'detached conflict deletes sync branch' rejects git show-ref --verify --quiet refs/heads/sync/upstream-20261103
 check 'detached conflict leaves clean tree' test -z "$(git status --porcelain)"
 
+fixture stale_conflict
+git branch stale
+fork_change shared fork
+upstream_change shared upstream
+git switch stale > /dev/null 2>&1
+before="$(git rev-parse HEAD)"
+check 'stale branch excludes fork main' rejects git merge-base --is-ancestor origin/main HEAD
+check 'stale conflict returns failure' rejects run sync-upstream
+check 'stale conflict message explains abort' grep -qF 'merge failed; aborted' "$W/reject.log"
+check 'stale conflict restores original branch' test "$(git branch --show-current)" = stale
+check 'stale conflict restores commit' test "$(git rev-parse HEAD)" = "$before"
+check 'stale conflict leaves no merge state' test ! -e "$(git rev-parse --git-path MERGE_HEAD)"
+check 'stale conflict leaves clean tree' test -z "$(git status --porcelain)"
+check 'stale conflict deletes sync branch' rejects git show-ref --verify --quiet refs/heads/sync/upstream-20261103
+check 'stale conflict can be retried' rejects run sync-upstream
+check 'stale retry reaches merge conflict' grep -qF 'merge failed; aborted' "$W/reject.log"
+check 'stale retry restores original branch' test "$(git branch --show-current)" = stale
+check 'stale retry deletes sync branch' rejects git show-ref --verify --quiet refs/heads/sync/upstream-20261103
+
 fixture push
 upstream_change feature upstream
 fork_before="$(git --git-dir=../fork.git rev-parse main)"

@@ -31,7 +31,7 @@ if ! git merge --no-ff --no-edit upstream/main; then
   if git show-ref --verify --quiet "refs/heads/$original_ref"; then
     git switch "$original_ref"
   fi
-  git branch -d "$branch"
+  git update-ref -d "refs/heads/$branch" "$(git rev-parse origin/main)"
   fork_die "merge failed; aborted, restored $original_ref and deleted $branch"
 fi
 if "$push"; then

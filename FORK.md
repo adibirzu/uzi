@@ -27,7 +27,7 @@ merge-base must be upstream history. It also rejects any ancestor reachable
 from `origin/main` but not `upstream/main`, including reverted fork commits.
 This checks history and changed paths, not uncommitted work; it requires a clean tree.
 
-To move `adi/*` work upstream, use `git cherry-pick -x` of the non-merge commits
+To move `adi/*` work upstream, use `git cherry-pick` of the non-merge commits
 onto a fresh `up/*` branch, dropping fork-only files from the cherry-picked set.
 
 Follow upstream conventions: a `changelog.d` fragment, touched-component
@@ -47,8 +47,14 @@ upstream `task gate:<component>` slices for touched components when the toolchai
 is available. The fork helpers have a short offline test:
 `bash scripts/fork/fork.test.sh`.
 
-In a clone whose `origin` is the fork, run `gh repo set-default adibirzu/uzi`
-once per clone and `no-mistakes init` in normal mode (PRs target fork main).
+Run the gate from a dedicated clone whose **only remote** is `origin` = the fork
+(ours: sibling clone `uzi-gate`). Run `gh repo set-default adibirzu/uzi` once
+there, then `no-mistakes init` in normal mode (PRs target fork main).
+An `upstream` remote pointing at the parent makes init refuse normal mode and
+demand fork mode (`origin` = parent plus `--fork-url`, PRs against `vtmocanu/uzi`).
+Bring branches into the gate clone with `git fetch <maintenance-clone> <branch>:<branch>`
+or by pushing from the maintenance clone. Keep `scripts/fork/*.sh` in the
+maintenance clone, with `upstream` configured and its push URL disabled.
 Run no-mistakes with `--skip rebase,ci,pr`, then open the PR yourself with explicit
 `gh pr create -R adibirzu/uzi --base main`; gh on a fork can default to the parent.
 The gate can push: run it only when fork pushing is authorized.
