@@ -18,12 +18,24 @@ Our work uses `adi/<issue>-<slug>` from fork `main`. PRs target fork `main`:
 Merge commits only, with the owner's explicit OK.
 
 Upstream-bound work uses `up/<slug>` from fresh `upstream/main`, never fork
-`main`, with one concern per branch and no fork-only files. Use
-`bash scripts/fork/new-up-branch.sh <slug>`, then before delivery run
-`bash scripts/fork/check-up-branch.sh`. The latter is offline: first refresh both
-remotes with `git fetch --multiple origin upstream`.
-Its optional `[base]` selects the diff base (default `upstream/main`); its
-merge-base must be upstream history. It also rejects any ancestor reachable
+`main`, with one concern per branch and no fork-only files. Keep the maintenance
+checkout on fork history so its helpers survive. From its clean repository root,
+create a separate worktree and invoke the preserved helpers by absolute path:
+
+```sh
+FORK_HELPERS="$(pwd -P)/scripts/fork"
+git worktree add --detach ../uzi-up-work HEAD
+cd ../uzi-up-work
+bash "$FORK_HELPERS/new-up-branch.sh" <slug>
+# After committing the contribution, before delivery:
+git fetch --multiple origin upstream
+bash "$FORK_HELPERS/check-up-branch.sh"
+```
+
+Run both helpers from the contribution worktree's root. Switching it to upstream
+history removes its fork-only files; the maintenance checkout retains the helpers.
+The checker is offline, accepts no arguments, requires an `up/*` branch, and uses
+`upstream/main` as its diff base. It also rejects any ancestor reachable
 from `origin/main` but not `upstream/main`, including reverted fork commits.
 This checks history and changed paths, not uncommitted work; it requires a clean tree.
 
@@ -54,7 +66,9 @@ An `upstream` remote pointing at the parent makes init refuse normal mode and
 demand fork mode (`origin` = parent plus `--fork-url`, PRs against `vtmocanu/uzi`).
 Bring branches into the gate clone with `git fetch <maintenance-clone> <branch>:<branch>`
 or by pushing from the maintenance clone. Keep `scripts/fork/*.sh` in the
-maintenance clone, with `upstream` configured and its push URL disabled.
+maintenance clone, with `upstream` configured and its push URL disabled. For
+`up/*` work, invoke them through `"$FORK_HELPERS"` from the separate contribution
+worktree as shown above; keep the maintenance checkout on fork history.
 Run no-mistakes with `--skip rebase,ci,pr`, then open the PR yourself with explicit
 `gh pr create -R adibirzu/uzi --base main`; gh on a fork can default to the parent.
 The gate can push: run it only when fork pushing is authorized.

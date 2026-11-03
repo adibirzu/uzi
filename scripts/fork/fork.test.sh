@@ -177,8 +177,21 @@ check 'push preserves all upstream refs' test "$(git --git-dir=../upstream.git s
 
 fixture branches
 fork_change FORK.md fork
+mkdir -p scripts/fork
+cp "$SUT/common.sh" "$SUT/new-up-branch.sh" "$SUT/check-up-branch.sh" scripts/fork/
+git add scripts/fork
+git commit -qm helpers
+git push -q origin main
+SUT="$PWD/scripts/fork"
+maintenance_root="$PWD"
+maintenance_head="$(git rev-parse HEAD)"
 upstream_change feature upstream
+git worktree add --detach ../up-work HEAD > "$W/worktree.log" 2>&1
+cd ../up-work
 run new-up-branch clean > "$W/new.log" 2>&1
+check 'contribution helpers removed by switch' test ! -e scripts/fork
+check 'maintenance checkout unchanged' test "$(git -C "$maintenance_root" rev-parse HEAD)" = "$maintenance_head"
+check 'maintenance branch preserved' test "$(git -C "$maintenance_root" branch --show-current)" = main
 check 'new branch name' test "$(git branch --show-current)" = up/clean
 check 'new branch starts at upstream' test "$(git rev-parse HEAD)" = "$(git rev-parse upstream/main)"
 check 'new branch has no tracking config' rejects git config --get branch.up/clean.remote
@@ -187,7 +200,8 @@ for slug in '' Upper -bad bad/slug 'bad slug' "$(printf '%064d' 0)"; do
   check "bad slug rejected: '$slug'" rejects run new-up-branch "$slug"
 done
 check 'clean upstream branch accepted' run check-up-branch
-check 'explicit upstream base accepted' run check-up-branch upstream/main
+check 'explicit upstream base refused' rejects run check-up-branch upstream/main
+check 'alternate base refused' rejects run check-up-branch origin/main
 echo change > normal
 git add normal
 git commit -qm normal
@@ -206,16 +220,17 @@ for path in FORK.md .no-mistakes.yaml scripts/fork/probe.sh; do
   git switch up/clean > /dev/null 2>&1
 done
 git branch -m other-name
-run check-up-branch > "$W/warning.log" 2>&1
-check 'non-up branch warning' grep -qF 'warning: branch name is not up/*' "$W/warning.log"
+check 'non-up branch refused' rejects run check-up-branch
 git branch -m up/clean
+git switch --detach HEAD > /dev/null 2>&1
+check 'detached HEAD refused' rejects run check-up-branch
+git switch up/clean > /dev/null 2>&1
 # Fork ancestry must fail even when there are no fork-only paths in the net diff.
 git merge --no-ff --no-edit origin/main > "$W/merge.log" 2>&1
 git rm -q FORK.md
 git commit -qm 'remove fork file'
 check 'fork ancestry rejected after file removal' rejects run check-up-branch
 check 'fork ancestry diagnostic' grep -qF 'fork-only history' "$W/reject.log"
-check 'fork merge-base rejected' rejects run check-up-branch origin/main
 git update-ref -d refs/remotes/origin/main
 check 'missing fork reference fails closed' rejects run check-up-branch
 [[ "$FAIL" -eq 0 ]]
