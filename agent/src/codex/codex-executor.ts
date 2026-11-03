@@ -1972,6 +1972,9 @@ export interface CodexExecutorOptions {
   readonly summaryClaimCodex?: unknown;
   readonly binding: CodexBinding;
   readonly client: WorkerClient;
+  /** Run-local credential owner. Defaults to the API client; worker-host custody
+   * supplies a narrow bridge so it cannot inherit unrelated client state. */
+  readonly credentialBridge?: Pick<WorkerClient, "releaseCodex" | "refreshCodex">;
   readonly provider: CodexProviderConfig;
   /** Startup-resolved Docker capability shared with the worker. */
   readonly dockerWiring?: DockerWiring;
@@ -5209,7 +5212,7 @@ export class CodexExecutor implements Executor {
               refreshCodex: async (...args) => {
                 await this.settleOwnedSummariesBeforeCredentials();
                 this.assertCaptureAdmission(revision);
-                const result = await this.lifetime.admit(() => this.opts.client.refreshCodex(...args));
+                const result = await this.lifetime.admit(() => (this.opts.credentialBridge ?? this.opts.client).refreshCodex(...args));
                 this.assertCaptureAdmission(revision);
                 return result;
               },
@@ -6349,7 +6352,7 @@ export class CodexExecutor implements Executor {
       checkAbort();
       assertResidueQuarantineOpen("provider_turn");
       try {
-        const released = await this.opts.client.releaseCodex(
+        const released = await (this.opts.credentialBridge ?? this.opts.client).releaseCodex(
           ctx.runId, { capability: binding.capability }, expected, signal,
         );
         checkAbort();

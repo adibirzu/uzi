@@ -48,9 +48,17 @@ The normal run ownership and operation-admission checks remain server-owned.
 
 The host reader and bridge are deliberately local and fail closed after a source removal,
 permission change, symlink replacement, parse failure, or account change. It
-does not inspect ambient credential locations. API-host meters, source-aware
-parking/cooldown admission, and native Mini/UID-split deployment are separate
-milestones. The M1 bridge re-reads the dedicated file and does not call the
-server release/refresh routes; provider refresh/write-back remains a later
-protocol-hardening step. They must not be approximated by transmitting raw auth data or a
-zero-byte sealed server login.
+does not inspect ambient credential locations. One worker process owns
+proactive local refresh: it mirrors `api/internal/codexauth`'s OAuth exchange,
+single-flights in-process, serializes processes with an owner-only sidecar
+lock, compare-reads under that lock, and atomically replaces a `0600` complete
+document after fsync. Unknown fields and a rotated refresh token are preserved.
+`invalid_grant` is a closed re-login result and ambiguous replies are never
+blind-retried. The dedicated home must not be used by an interactive CLI while
+uzi owns it. Readiness is revalidated on every heartbeat, so a lost source is
+unclaimable rather than claimed and failed.
+
+API-host meters, source-aware parking/cooldown admission, and native
+Mini/UID-split deployment are separate milestones. The M1 bridge does not call
+the server release/refresh routes. It must not be approximated by transmitting
+raw auth data or a zero-byte sealed server login.

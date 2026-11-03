@@ -207,6 +207,18 @@ SET codex_host_source_id = sqlc.narg('source_id')::text,
     updated_at = now()
 WHERE id = @id;
 
+-- name: HasReadyWorkerCodexHostSource :one
+-- Create-time admission only: a later loss holds the run queued rather than
+-- silently substituting a server-held credential.
+SELECT EXISTS (
+    SELECT 1 FROM workers
+    WHERE user_id = @user_id
+      AND codex_host_source_ready
+      AND codex_host_source_id = @source_id::text
+      AND codex_host_source_revision = @source_revision::bigint
+      AND 'codex_host_login_v1' = ANY(protocol_capabilities)
+);
+
 -- name: RegisterWorker :one
 -- Worker announces version + its self-reported template and comes online;
 -- heartbeat is stamped now. template_reported is what the image bakes in (PRD

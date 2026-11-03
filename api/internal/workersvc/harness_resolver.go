@@ -69,6 +69,9 @@ type resolveHarnessInput struct {
 }
 
 var (
+	// errHostCodexSourceUnavailable distinguishes an invalid/stale host source at
+	// create time from an ordinary missing server credential.
+	errHostCodexSourceUnavailable = errors.New("worker-host Codex source is not ready for this user")
 	// errNoCredentialForHarness is the typed refusal when an EXPLICIT harness was asked
 	// for but that harness has no usable credential. Explicit selection never falls back
 	// to the other harness (D4), so this is terminal for that request — the resolver does
@@ -666,6 +669,15 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 	// any Codex freeze, so a create that does not fully succeed commits nothing.
 	defer func() { _ = tx.Rollback(ctx) }()
 	qtx := store.New(tx)
+	if hostRequested {
+		ready, readyErr := qtx.HasReadyWorkerCodexHostSource(ctx, store.HasReadyWorkerCodexHostSourceParams{UserID: userID, SourceID: hostSource.ID, SourceRevision: hostSource.Revision})
+		if readyErr != nil {
+			return store.Run{}, resolvedHarness{}, readyErr
+		}
+		if !ready {
+			return store.Run{}, resolvedHarness{}, errHostCodexSourceUnavailable
+		}
+	}
 
 	// Re-read the credential/default facts and resolve D11 INSIDE the transaction that commits.
 	var res resolvedHarness
