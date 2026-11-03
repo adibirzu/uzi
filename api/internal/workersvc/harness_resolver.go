@@ -185,6 +185,26 @@ type resolvedHarness struct {
 	Decision       *harnessCreationDecision
 }
 
+// HostCodexSource is deliberately only routing metadata.  The API never receives
+// a path, account id, token, refresh token, or sealed login for this source.
+type HostCodexSource struct {
+	ID       string
+	Revision int64
+}
+
+type hostCodexSourceContextKey struct{}
+
+// WithHostCodexSource requests the worker-host lane for this one create.  It is
+// consumed inside createRunAtomic, before the row can be committed or claimed.
+func WithHostCodexSource(ctx context.Context, source HostCodexSource) context.Context {
+	return context.WithValue(ctx, hostCodexSourceContextKey{}, source)
+}
+
+func hostCodexSourceFromContext(ctx context.Context) (HostCodexSource, bool) {
+	s, ok := ctx.Value(hostCodexSourceContextKey{}).(HostCodexSource)
+	return s, ok && s.ID != "" && s.Revision > 0
+}
+
 // harnessResolverStore is the narrow C1-frozen read surface the store-backed resolver
 // consumes. *store.Queries satisfies it; the production Service's s.q is a *store.Queries
 // underneath, reached via harnessStore() below. Keeping it a local narrow interface
@@ -600,6 +620,10 @@ var errCodexCreateRequiresTx = errors.New("codex run creation requires an atomic
 // falls back to a non-atomic Codex insert. A Claude resolution with a nil txBeginner keeps the
 // existing cheap non-tx path (no freeze is needed).
 func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explicit *Harness, insert func(q *store.Queries, resolved resolvedHarness) (store.Run, error), origins ...harnessCreationOrigin) (store.Run, resolvedHarness, error) {
+	hostSource, hostRequested := hostCodexSourceFromContext(ctx)
+	if hostRequested && explicit != nil && *explicit != HarnessCodex {
+		return store.Run{}, resolvedHarness{}, errNoUsableCredential
+	}
 	var origin harnessCreationOrigin
 	if len(origins) > 0 {
 		origin = origins[0]
@@ -644,7 +668,12 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 	qtx := store.New(tx)
 
 	// Re-read the credential/default facts and resolve D11 INSIDE the transaction that commits.
-	res, err := s.resolveRunHarnessQ(ctx, userID, explicit, qtx)
+	var res resolvedHarness
+	if hostRequested {
+		res = resolvedHarness{Harness: HarnessCodex}
+	} else {
+		res, err = s.resolveRunHarnessQ(ctx, userID, explicit, qtx)
+	}
 	if err != nil {
 		return store.Run{}, resolvedHarness{}, err
 	}
@@ -653,7 +682,7 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 	if err != nil {
 		return store.Run{}, resolvedHarness{}, err
 	}
-	overflowEligible := policy.HarnessOverflowEnabled && origin.eligible(policy)
+	overflowEligible := !hostRequested && policy.HarnessOverflowEnabled && origin.eligible(policy)
 	if overflowEligible {
 		if s.codexSelectHook != nil {
 			s.codexSelectHook(ctx)
@@ -670,7 +699,10 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 			return store.Run{}, resolvedHarness{}, err
 		}
 	}
-	res, overflowPick, err := s.evaluateCreationOverflow(ctx, qtx, userID, res, policy, origin)
+	var overflowPick *codexPoolPick
+	if !hostRequested {
+		res, overflowPick, err = s.evaluateCreationOverflow(ctx, qtx, userID, res, policy, origin)
+	}
 	if err != nil {
 		return store.Run{}, resolvedHarness{}, err
 	}
@@ -750,7 +782,15 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 		}
 	}
 
-	if res.Harness == HarnessCodex {
+	if hostRequested {
+		n, ferr := qtx.FreezeRunCodexHostBinding(ctx, store.FreezeRunCodexHostBindingParams{ID: run.ID, UserID: userID, SourceID: hostSource.ID, SourceRevision: hostSource.Revision})
+		if ferr != nil {
+			return store.Run{}, resolvedHarness{}, ferr
+		}
+		if n != 1 {
+			return store.Run{}, resolvedHarness{}, ErrCodexBindingConflict
+		}
+	} else if res.Harness == HarnessCodex {
 		// resolveRunHarness returns Codex only with a populated choice; guard defensively so a
 		// disagreement never freezes a Codex run with no credential.
 		if res.Codex == nil {

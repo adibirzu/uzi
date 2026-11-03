@@ -323,6 +323,10 @@ const ForgeAPISuccessV1 = "forge_" + "api_" + "success_v1"
 // push) can never claim a default-branch CI-repair run. Never a repo requirement.
 const CIConfigGuardV1 = "ci_config_guard_v1"
 
+// CodexHostLoginV1 means a worker can execute a Codex claim whose login remains
+// exclusively in its local, dedicated CODEX_HOME.
+const CodexHostLoginV1 = "codex_host_login_v1"
+
 // RecoveryPrerequisiteClosureV1 records upload provenance; advertisement waits for release support.
 const RecoveryPrerequisiteClosureV1 = "recovery_prerequisite_closure_v1"
 
@@ -348,6 +352,7 @@ var protocolVocabulary = map[string]struct{}{
 	RecoveryHeldPublicationV1:       {},
 	RecoveryHeldPublicationV2:       {},
 	CodexHarnessV1:                  {},
+	CodexHostLoginV1:                {},
 	CodexRuntimeV2:                  {},
 	CodexRefreshRecoveryV1:          {},
 	CodexAccountParkV1:              {},

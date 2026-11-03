@@ -30,6 +30,15 @@ export type ExecutorKind = "sdk" | "stub";
  */
 export type CommandSandboxMode = "off" | "required" | "best-effort";
 
+/**
+ * Where a Codex subscription is held. `server` is the existing sealed API-owned
+ * credential path. `worker_host` is an explicit fork-only opt-in; it never
+ * infers a CODEX_HOME from the process environment.
+ */
+export type CodexCredentialSource =
+  | { kind: "server" }
+  | { kind: "worker_host"; home: string };
+
 export interface Config {
   recoveryDecodedLimitBytes: number;
   apiUrl: string;
@@ -259,6 +268,10 @@ export interface Config {
    * influenced by the model.
    */
   codexCommandSandbox: CommandSandboxMode;
+  /** Explicit Codex credential custody. Absent remains the server-owned path. */
+  codexCredentialSource: CodexCredentialSource;
+  /** Non-secret registration metadata populated only after host custody preflight. */
+  codexHostSource?: { sourceId: string; sourceRevision: number; ready: boolean };
   /**
    * Issue #3675: the measured size (bytes) at which a run's Codex command cache is
    * rotated to a fresh generation (UZI_CODEX_COMMAND_CACHE_RUN_BYTES). Parsed strictly;
@@ -491,6 +504,20 @@ function parseCommandSandbox(v: string | undefined): CommandSandboxMode {
   throw new Error(`invalid UZI_CODEX_COMMAND_SANDBOX ${JSON.stringify(v)} (expected "off", "required" or "best-effort")`);
 }
 
+/** Parse the host-custody switch strictly: a typo must never silently fall back. */
+function parseCodexCredentialSource(env: NodeJS.ProcessEnv): CodexCredentialSource {
+  const source = env.UZI_CODEX_CREDENTIAL_SOURCE?.trim().toLowerCase();
+  if (source === undefined || source === "" || source === "server") return { kind: "server" };
+  if (source !== "worker_host") {
+    throw new Error(`invalid UZI_CODEX_CREDENTIAL_SOURCE ${JSON.stringify(env.UZI_CODEX_CREDENTIAL_SOURCE)} (expected "server" or "worker_host")`);
+  }
+  const home = env.UZI_CODEX_HOST_HOME?.trim();
+  if (!home || !path.isAbsolute(home)) {
+    throw new Error("UZI_CODEX_HOST_HOME must be an absolute path when UZI_CODEX_CREDENTIAL_SOURCE=worker_host");
+  }
+  return { kind: "worker_host", home: path.resolve(home) };
+}
+
 /** Default per-run command-cache rotation threshold (4 GiB). */
 const DEFAULT_CODEX_COMMAND_CACHE_RUN_BYTES = 4294967296;
 
@@ -689,6 +716,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     // PRD #1493 M3: the command-sandbox mode, strict-parsed (unknown value throws
     // and refuses to start). Default `off`: Landlock is never applied.
     codexCommandSandbox: parseCommandSandbox(env.UZI_CODEX_COMMAND_SANDBOX),
+    codexCredentialSource: parseCodexCredentialSource(env),
     codexCommandCacheRunBytes: parseCacheRunBytes(env.UZI_CODEX_COMMAND_CACHE_RUN_BYTES),
     // Populated by main.ts after the async receipt + Landlock probes; the sync parse
     // cannot probe, so the default is "do not advertise" until startup resolves it.

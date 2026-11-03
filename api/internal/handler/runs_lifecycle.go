@@ -101,6 +101,13 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 		// implicit D11 resolution. An invalid enum is a 400. The web start dialog picker is M4a and
 		// the `uzi run create --harness` flag is M5; this handler accepts the field now.
 		Harness string `json:"harness"`
+		// CodexCredentialSource is intentionally metadata-only.  worker_host selects a
+		// local worker source; it never accepts a token, login, path, or account id.
+		CodexCredentialSource *struct {
+			Kind           string `json:"kind"`
+			SourceID       string `json:"source_id"`
+			SourceRevision int64  `json:"source_revision"`
+		} `json:"codex_credential_source"`
 	}
 	if err := httpx.DecodeJSON(r, &req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "invalid request body")
@@ -154,6 +161,24 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 	if !harnessOK {
 		httpx.Error(w, http.StatusBadRequest, "harness must be one of claude, codex")
 		return
+	}
+	if req.CodexCredentialSource != nil {
+		source := req.CodexCredentialSource
+		if source.Kind != "worker_host" || source.SourceRevision <= 0 {
+			httpx.Error(w, http.StatusBadRequest, "codex_credential_source must be a worker_host source with a positive revision")
+			return
+		}
+		if _, err := uuid.Parse(source.SourceID); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "codex_credential_source.source_id must be a uuid")
+			return
+		}
+		if explicit != nil && *explicit != workersvc.HarnessCodex {
+			httpx.Error(w, http.StatusBadRequest, "codex_credential_source requires harness codex")
+			return
+		}
+		h := workersvc.HarnessCodex
+		explicit = &h
+		r = r.WithContext(workersvc.WithHostCodexSource(r.Context(), workersvc.HostCodexSource{ID: source.SourceID, Revision: source.SourceRevision}))
 	}
 
 	// PRD #1429 M2 (D5): thread the RAW credential override (mode + optional secret id) down into

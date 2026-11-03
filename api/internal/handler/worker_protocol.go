@@ -22,6 +22,7 @@ import (
 	"github.com/vtmocanu/uzi/api/internal/capability"
 	"github.com/vtmocanu/uzi/api/internal/httpx"
 	mw "github.com/vtmocanu/uzi/api/internal/middleware"
+	"github.com/vtmocanu/uzi/api/internal/pgconv"
 	"github.com/vtmocanu/uzi/api/internal/store"
 	"github.com/vtmocanu/uzi/api/internal/termsafe"
 	"github.com/vtmocanu/uzi/api/internal/workersvc"
@@ -228,6 +229,11 @@ func (h *Handler) WorkerRegister(w http.ResponseWriter, r *http.Request) {
 		// vocabulary or the web capability picker. An unknown/garbled name here is
 		// dropped, never stored, and the register never 400s over this field.
 		ProtocolCapabilities []string `json:"protocol_capabilities"`
+		CodexHostSource      *struct {
+			SourceID       string `json:"source_id"`
+			SourceRevision int64  `json:"source_revision"`
+			Ready          bool   `json:"ready"`
+		} `json:"codex_host_source"`
 		// ActiveSnapshot is the worker's active-run snapshot (PRD #1390 M2a). #1390's worker
 		// NEVER sends it on register — the path exists for #1391's restart-replay of pending
 		// outcomes (it is the one snapshot exempt from the nonce check). Captured as an isolated
@@ -308,6 +314,30 @@ func (h *Handler) WorkerRegister(w http.ResponseWriter, r *http.Request) {
 		slog.Error("worker register", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+	// The source report contains only an opaque random id and readiness; do not
+	// accept it unless this worker also advertises the protocol that consumes it.
+	if req.CodexHostSource != nil {
+		source := req.CodexHostSource
+		if _, parseErr := uuid.Parse(source.SourceID); parseErr != nil || source.SourceRevision <= 0 || !source.Ready || !slices.Contains(capability.FilterProtocol(req.ProtocolCapabilities), capability.CodexHostLoginV1) {
+			httpx.Error(w, http.StatusBadRequest, "invalid codex_host_source")
+			return
+		}
+		if h.q == nil {
+			httpx.Error(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if _, err := h.q.SetWorkerCodexHostSource(r.Context(), store.SetWorkerCodexHostSourceParams{ID: wkr.ID, SourceID: pgconv.Text(source.SourceID), SourceRevision: pgconv.Int8Ptr(&source.SourceRevision), Ready: pgconv.BoolPtr(&source.Ready)}); err != nil {
+			slog.Error("worker host Codex source", "error", err)
+			httpx.Error(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+	} else if h.q != nil {
+		if _, err := h.q.SetWorkerCodexHostSource(r.Context(), store.SetWorkerCodexHostSourceParams{ID: wkr.ID}); err != nil {
+			slog.Error("worker host Codex source clear", "error", err)
+			httpx.Error(w, http.StatusInternalServerError, "internal error")
+			return
+		}
 	}
 	// A hosted worker registering is the PROOF that its join token reached the pod
 	// (PRD #58 Decision 3): RequireWorker resolved wkr by matching sha256(the token
@@ -547,6 +577,11 @@ func (h *Handler) WorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		Version         string          `json:"version"`
 		Stats           json.RawMessage `json:"stats"`
 		ProtocolRefresh json.RawMessage `json:"protocol_refresh"`
+		CodexHostSource *struct {
+			SourceID       string `json:"source_id"`
+			SourceRevision int64  `json:"source_revision"`
+			Ready          bool   `json:"ready"`
+		} `json:"codex_host_source"`
 		// Outbox is the per-run outbox depth (PRD #1391 M5), its OWN isolated
 		// json.RawMessage exactly like Stats and for the same reason: a malformed or
 		// oversized report must drop the depth WITHOUT failing the heartbeat's liveness.
@@ -574,6 +609,17 @@ func (h *Handler) WorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if err := httpx.DecodeJSON(r, &req); err != nil && !errors.Is(err, io.EOF) {
 		httpx.Error(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	if source := req.CodexHostSource; source != nil {
+		if _, parseErr := uuid.Parse(source.SourceID); parseErr != nil || source.SourceRevision <= 0 || !source.Ready || h.q == nil {
+			httpx.Error(w, http.StatusBadRequest, "invalid codex_host_source")
+			return
+		}
+		if _, err := h.q.SetWorkerCodexHostSource(r.Context(), store.SetWorkerCodexHostSourceParams{ID: wkr.ID, SourceID: pgconv.Text(source.SourceID), SourceRevision: pgconv.Int8Ptr(&source.SourceRevision), Ready: pgconv.BoolPtr(&source.Ready)}); err != nil {
+			slog.Error("worker host Codex source heartbeat", "error", err)
+			httpx.Error(w, http.StatusInternalServerError, "internal error")
+			return
+		}
 	}
 	// Second step: validate + clamp the isolated stats (Decision 5). A malformed or
 	// invalid sample drops to nil (columns written NULL) and the heartbeat still 200s.

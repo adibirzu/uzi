@@ -151,6 +151,53 @@ UI, an API response, or a log, not even to you. If you need to change it,
 use **Replace value** to paste a new one; there is nothing to reveal or
 edit in place.
 
+## Host-held login (fork, experimental)
+
+The `adibirzu/uzi` fork has an experimental worker-host custody mode for a
+dedicated ChatGPT subscription login. It is deliberately opt-in and is not an
+alternative spelling of an imported Codex credential: the login remains on the
+worker host and must never be pasted into uzi.
+
+Create a dedicated, file-store `CODEX_HOME` on the worker host, not your usual
+`~/.codex` directory. The directory and its `auth.json` must be owned by the
+worker user and have modes `0700` and `0600`, respectively:
+
+```sh
+export CODEX_HOME=/absolute/private/uzi-codex-home
+mkdir -p "$CODEX_HOME"
+chmod 700 "$CODEX_HOME"
+codex login -c cli_auth_credentials_store=file
+chmod 600 "$CODEX_HOME/auth.json"
+```
+
+Then configure only the worker process:
+
+```sh
+UZI_CODEX_CREDENTIAL_SOURCE=worker_host
+UZI_CODEX_HOST_HOME=/absolute/private/uzi-codex-home
+```
+
+The worker refuses startup for an unknown source value, a relative path,
+missing/keyring-only login, symlink, wrong owner, permissive mode, malformed
+file, or a non-ChatGPT login. It never auto-discovers `HOME` or `CODEX_HOME`.
+Its host source identifier is a random opaque worker-state value, not a hash of
+the path or any credential.
+
+For a run created with `harness:"codex"` and
+`codex_credential_source:{"kind":"worker_host",...}`, uzi freezes only the
+opaque source id and revision. The claim is routed only to that ready worker and
+contains that metadata block only: no access token, refresh token, login blob,
+or host path leaves the worker. A missing source remains queued; it never falls
+back to an imported server credential or API key. The worker's local bridge
+re-reads the dedicated file on each credential operation and never calls the
+API's Codex release or refresh routes for this source.
+
+This is experimental. It does not yet provide host meter reports, source-aware
+parking/cooldown admission, Mini native deployment, or a UID-split deployment
+recipe. Refresh relies on the dedicated Codex file being maintained by the
+local Codex app-server/login flow; uzi does not perform a provider refresh or
+write a login file itself. See ADR-3751 for rollout constraints.
+
 ## Status legend
 
 Each stored Codex credential shows one of four statuses:
