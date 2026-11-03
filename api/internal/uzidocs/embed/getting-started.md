@@ -27,7 +27,7 @@ Once a repo is enabled, its board appears in the sidebar, showing the
 repo's open issues; the `uzi`-labeled ones are the runnable ones. Dragging
 a card between columns relabels the issue on the forge. See [Board](./board.md).
 
-## 4. Add your Anthropic token
+## 4. Add a model credential
 
 Agents run with your own credential. Paste an Anthropic token once in
 Settings: see [Anthropic token](./anthropic-token.md). Prefer Codex

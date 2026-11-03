@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { Dashboard } from "./Dashboard";
-import { api, type ForgeConnection, type Repo, type RunListItem, type SecretMeta, type Worker } from "../lib/api";
+import { api, type ForgeConnection, type Repo, type RunListItem, type SecretMeta, type UserSettings, type Worker } from "../lib/api";
 import { useAuth } from "../auth/AuthContext";
 
 // The overview loads its core endpoints and usage, polls runs/workers every 10s,
@@ -19,6 +19,7 @@ vi.mock("../lib/api", async (importOriginal) => {
       listRepos: vi.fn(),
       listAgentTemplates: vi.fn(),
       listSecrets: vi.fn(),
+      getMySettings: vi.fn(),
       listConnections: vi.fn(),
       getUsage: vi.fn(),
       getAdminUsage: vi.fn(),
@@ -29,6 +30,21 @@ vi.mock("../lib/api", async (importOriginal) => {
 vi.mock("../auth/AuthContext", () => ({ useAuth: vi.fn() }));
 
 const mockApi = vi.mocked(api);
+
+const defaultSettings: UserSettings = {
+  harness_overflow_enabled: false,
+  default_harness: null,
+  default_model: null,
+  default_effort: null,
+  judge_model: null,
+  summary_model: null,
+  appearance_mode: null,
+  light_theme: null,
+  dark_theme: null,
+  typeface: null,
+  theme: null,
+  codex_account_mode: "default",
+};
 
 const user = {
   id: "u1",
@@ -211,6 +227,7 @@ beforeEach(() => {
   mockApi.listRepos.mockResolvedValue({ repos: [] });
   mockApi.listAgentTemplates.mockResolvedValue({ templates: [] });
   mockApi.listSecrets.mockResolvedValue({ secrets: [] });
+  mockApi.getMySettings.mockResolvedValue({ settings: defaultSettings });
   mockApi.listConnections.mockResolvedValue({ connections: [] });
   // Default: no usage yet (the run_count===0 "nothing yet" state).
   mockApi.getUsage.mockResolvedValue(emptySelf());
@@ -328,7 +345,7 @@ describe("Dashboard onboarding checklist (PRD #60)", () => {
     expect(classes.filter((c) => c.startsWith("decoration-"))).toEqual([]);
 
     // Sanity: an open step is not struck at all.
-    expect(screen.getByText("Add your Anthropic token").className).not.toContain("line-through");
+    expect(screen.getByText("Add a model credential").className).not.toContain("line-through");
   });
 });
 
@@ -379,11 +396,35 @@ describe("Dashboard onboarding step 4 is durable (PRD #1331)", () => {
     expect(container.textContent).toContain("0/4 done");
   });
 
-  it("hides the checklist card once steps 1-3 are done and the fleet has registered, while the Workers tile still shows 0/N", async () => {
-    // Steps 1-3 done, plus a registered-but-offline fleet → all four steps done → the
-    // "Get the factory running" card hides. A positive control against a vacuous
-    // negative: the Workers-online tile lives outside the !ready gate, so it survives
-    // the card hiding and still reads 0/2 for the two offline workers.
+  // PRD #1429: credential usability must reach the actual checklist, including
+  // the viewer's account mode. Every other setup step is complete in this matrix.
+  it.each<{
+    name: string;
+    rows: Partial<SecretMeta>[];
+    mode: "default" | "auto";
+    ready: boolean;
+  }>([
+    { name: "Claude token", rows: [{}], mode: "default", ready: true },
+    { name: "linked default Codex login", rows: [{ kind: "codex_auth", codex_status: "linked" }], mode: "default", ready: true },
+    { name: "default OpenAI API key", rows: [{ kind: "openai_api_key" }], mode: "default", ready: true },
+    { name: "auto with a linked pooled nondefault login", rows: [
+      { kind: "codex_auth", codex_status: "staging" },
+      { id: "pooled", kind: "codex_auth", is_default: false, auto_eligible: true, codex_status: "linked" },
+    ], mode: "auto", ready: true },
+    { name: "auto with only a staging pooled login despite a linked default", rows: [
+      { kind: "codex_auth", codex_status: "linked" },
+      { id: "pooled", kind: "codex_auth", is_default: false, auto_eligible: true, codex_status: "staging" },
+    ], mode: "auto", ready: false },
+    { name: "auto with only a disabled pooled login despite an API-key default", rows: [
+      { kind: "openai_api_key" },
+      { id: "pooled", kind: "codex_auth", is_default: false, auto_eligible: true, codex_status: "linked", enabled: false },
+    ], mode: "auto", ready: false },
+    { name: "staging-only Codex login", rows: [{ kind: "codex_auth", codex_status: "staging" }], mode: "default", ready: false },
+    { name: "no credential", rows: [], mode: "default", ready: false },
+  ])("reflects $name in checklist completion while the Workers tile still shows 0/N", async ({ rows, mode, ready }) => {
+    // A registered fleet, connected forge and enabled repo leave only credential
+    // usability to decide whether the card hides or reads 3/4 done. The loaded
+    // Workers tile remains visible and reads 0/2 for the two offline workers.
     const secret: SecretMeta = {
       id: "s1",
       kind: "anthropic_token",
@@ -425,7 +466,8 @@ describe("Dashboard onboarding step 4 is durable (PRD #1331)", () => {
       docker_allowlisted: false,
       docker_blocked: false,
     };
-    mockApi.listSecrets.mockResolvedValue({ secrets: [secret] });
+    mockApi.listSecrets.mockResolvedValue({ secrets: rows.map((row) => ({ ...secret, ...row })) });
+    mockApi.getMySettings.mockResolvedValue({ settings: { ...defaultSettings, codex_account_mode: mode } });
     mockApi.listConnections.mockResolvedValue({ connections: [connection] });
     mockApi.listRepos.mockResolvedValue({ repos: [repo] });
     mockApi.listWorkers.mockResolvedValue({
@@ -437,8 +479,21 @@ describe("Dashboard onboarding step 4 is durable (PRD #1331)", () => {
     const { container } = renderDashboard();
     await flush();
 
-    expect(screen.queryByText("Get the factory running")).toBeNull();
+    // Loaded tiles are a positive control: a failed core load must not look ready.
+    expect(screen.getByText("Active runs")).toBeTruthy();
     expect(container.textContent).toContain("0/2");
+    if (ready) {
+      expect(screen.queryByText("Get the factory running")).toBeNull();
+    } else {
+      expect(screen.getByText("Get the factory running")).toBeTruthy();
+      expect(screen.getByText("3/4 done")).toBeTruthy();
+      const step = screen.getByText("Add a model credential");
+      expect(step.className).not.toContain("line-through");
+      expect(within(step.closest("li")!).getByRole("link", { name: /Settings/ }).getAttribute("href")).toBe("/settings");
+      for (const title of ["Connect your bot", "Enable a repo", "Bring a worker online"]) {
+        expect(screen.getByText(title).className).toContain("line-through");
+      }
+    }
   });
 });
 
