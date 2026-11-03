@@ -23,10 +23,16 @@ if git merge-base --is-ancestor upstream/main origin/main; then
   exit 0
 fi
 git show-ref --verify --quiet "refs/heads/$branch" && fork_die "branch already exists: $branch"
+original_ref="$(git symbolic-ref --quiet --short HEAD || git rev-parse HEAD)"
 git switch --no-track -c "$branch" origin/main
 if ! git merge --no-ff --no-edit upstream/main; then
   git merge --abort || fork_die "merge failed and abort failed; inspect $branch manually"
-  fork_die "merge failed; aborted, branch $branch retained for inspection"
+  git switch --detach "$original_ref"
+  if git show-ref --verify --quiet "refs/heads/$original_ref"; then
+    git switch "$original_ref"
+  fi
+  git branch -d "$branch"
+  fork_die "merge failed; aborted, restored $original_ref and deleted $branch"
 fi
 if "$push"; then
   git push origin "$branch"

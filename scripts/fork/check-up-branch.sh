@@ -8,7 +8,8 @@ fork_preflight
 base="${1:-upstream/main}"
 git rev-parse --verify 'origin/main^{commit}' >/dev/null
 git rev-parse --verify 'upstream/main^{commit}' >/dev/null
-git symbolic-ref --quiet --short HEAD >/dev/null || fork_die 'check requires a current branch'
+current_branch="$(git symbolic-ref --quiet --short HEAD)" || fork_die 'check requires a current branch'
+[[ "$current_branch" == up/* ]] || printf 'fork: warning: branch name is not up/*: %s\n' "$current_branch" >&2
 merge_base="$(git merge-base "$base" HEAD)"
 # An alternate diff base must still belong entirely to upstream history.
 git merge-base --is-ancestor "$merge_base" upstream/main || fork_die 'merge-base contains fork history'
@@ -19,7 +20,7 @@ while IFS= read -r commit; do
     fork_die "branch contains fork-only history: $commit"
   fi
 done <<< "$(git rev-list origin/main --not upstream/main)"
-paths="$(git diff --no-renames --name-only "$merge_base"..HEAD -- FORK.md scripts/fork/ .no-mistakes.yaml)"
-[[ -z "$paths" ]] || fork_die "fork-only paths in upstream diff:
+paths="$(git log --name-only --format= "$merge_base"..HEAD -- "${FORK_ONLY_PATHS[@]}")"
+[[ -z "$paths" ]] || fork_die "fork-only paths in upstream history:
 $paths"
 echo 'upstream branch check: clean'

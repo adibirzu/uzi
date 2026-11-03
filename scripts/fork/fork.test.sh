@@ -57,6 +57,7 @@ fork_change() {
   git commit -qm fork
   git push -q origin main
 }
+export FORK_ORIGIN_PATTERN='^file://.*/fork[.]git$'
 export SYNC_DATE=20261103
 fixture noop
 before="$(git rev-parse HEAD)"
@@ -80,6 +81,28 @@ check 'PR command printed' grep -qF 'gh pr create -R adibirzu/uzi --base main --
 check 'without --push remote branch absent' rejects git --git-dir=../fork.git show-ref --verify refs/heads/sync/upstream-20261103
 # Still behind remotely: the same dated local branch must not be overwritten.
 check 'existing sync branch refused' rejects run sync-upstream
+
+fixture ancestor
+upstream_change feature upstream
+main_before="$(git rev-parse origin/main)"
+run sync-upstream > "$W/ancestor.log" 2>&1
+check 'strict ancestor sync has two parents' test "$(git rev-list --parents -n 1 HEAD | awk '{print NF}')" = 3
+check 'strict ancestor first parent is fork main' test "$(git rev-parse HEAD^1)" = "$main_before"
+check 'strict ancestor second parent is upstream main' test "$(git rev-parse HEAD^2)" = "$(git rev-parse upstream/main)"
+
+fixture origin_safety
+fork_url="$(git remote get-url origin)"
+upstream_url="$(git remote get-url upstream)"
+# Broad test pattern proves equality is independently refused.
+git remote set-url origin "$upstream_url"
+check 'origin equals upstream refused' rejects env FORK_ORIGIN_PATTERN='^file://' bash "$SUT/sync-upstream.sh" --push
+git remote set-url origin "$fork_url"
+git remote set-url --push origin "$upstream_url"
+check 'origin push equals upstream refused' rejects env FORK_ORIGIN_PATTERN='^file://' bash "$SUT/sync-upstream.sh" --push
+git remote set-url --push origin "$fork_url"
+check 'default pattern rejects file origin' rejects env -u FORK_ORIGIN_PATTERN bash "$SUT/sync-upstream.sh"
+git remote set-url --add --push origin 'https://github.com/vtmocanu/uzi.git'
+check 'additional non-fork push URL refused' rejects run sync-upstream
 
 fixture safety
 # Both transport and local paths must be refused, including a second push URL.
@@ -112,7 +135,16 @@ check 'conflict message explains abort' grep -qF 'merge failed; aborted' "$W/rej
 check 'no leftover merge state' test ! -e "$(git rev-parse --git-path MERGE_HEAD)"
 check 'conflict keeps fork HEAD' test "$(git rev-parse HEAD)" = "$before"
 check 'conflict leaves clean tree' test -z "$(git status --porcelain)"
-check 'conflict retains sync branch' git show-ref --verify --quiet refs/heads/sync/upstream-20261103
+check 'conflict restores original branch' test "$(git branch --show-current)" = main
+check 'conflict deletes sync branch' rejects git show-ref --verify --quiet refs/heads/sync/upstream-20261103
+check 'conflict can be retried' rejects run sync-upstream
+check 'retry reaches merge conflict' grep -qF 'merge failed; aborted' "$W/reject.log"
+git switch --detach "$before" > /dev/null 2>&1
+check 'detached conflict returns failure' rejects run sync-upstream
+check 'detached conflict restores commit' test "$(git rev-parse HEAD)" = "$before"
+check 'detached conflict restores detached state' rejects git symbolic-ref --quiet HEAD
+check 'detached conflict deletes sync branch' rejects git show-ref --verify --quiet refs/heads/sync/upstream-20261103
+check 'detached conflict leaves clean tree' test -z "$(git status --porcelain)"
 
 fixture push
 upstream_change feature upstream
@@ -141,6 +173,7 @@ echo change > normal
 git add normal
 git commit -qm normal
 check 'ordinary upstream diff accepted' run check-up-branch
+clean_head="$(git rev-parse HEAD)"
 for path in FORK.md .no-mistakes.yaml scripts/fork/probe.sh; do
   mkdir -p "$(dirname "$path")"
   echo fork > "$path"
@@ -148,8 +181,15 @@ for path in FORK.md .no-mistakes.yaml scripts/fork/probe.sh; do
   git commit -qm forbidden
   check "fork-only path rejected: $path" rejects run check-up-branch
   git revert --no-edit HEAD > /dev/null 2>&1
+  check "add-then-delete fork-only path rejected: $path" rejects run check-up-branch
+  git switch --detach "$clean_head" > /dev/null 2>&1
+  git branch -f up/clean "$clean_head"
+  git switch up/clean > /dev/null 2>&1
 done
-check 'reverted fork-only paths accepted without fork ancestry' run check-up-branch
+git branch -m other-name
+run check-up-branch > "$W/warning.log" 2>&1
+check 'non-up branch warning' grep -qF 'warning: branch name is not up/*' "$W/warning.log"
+git branch -m up/clean
 # Fork ancestry must fail even when there are no fork-only paths in the net diff.
 git merge --no-ff --no-edit origin/main > "$W/merge.log" 2>&1
 git rm -q FORK.md

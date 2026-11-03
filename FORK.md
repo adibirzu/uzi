@@ -7,11 +7,11 @@ Fork-only files **never go upstream**: `FORK.md`, `scripts/fork/**`, and
 
 ## Branches and delivery
 
-Fork `main` is upstream `main` plus only those fork-only files. Update it only
+Fork `main` is upstream `main` plus fork-only files and merged fork work. Update it only
 through a reviewed sync PR: `sync/upstream-YYYYMMDD`, produced with
 `git merge --no-ff upstream/main`, then merged by the owner with a merge commit.
-Never force-push, rebase, or commit directly to `main`. With no fork-only commits,
-a fast-forward is equivalent; once they exist, the sync PR is a merge.
+Never force-push, rebase, or commit directly to `main`. Issue #13's "fast-forward only"
+wording is superseded by sync PRs made with merge commits.
 
 Our work uses `adi/<issue>-<slug>` from fork `main`. PRs target fork `main`:
 `gh pr create -R adibirzu/uzi --base main`. Include `Closes #N` in the body.
@@ -20,11 +20,15 @@ Merge commits only, with the owner's explicit OK.
 Upstream-bound work uses `up/<slug>` from fresh `upstream/main`, never fork
 `main`, with one concern per branch and no fork-only files. Use
 `bash scripts/fork/new-up-branch.sh <slug>`, then before delivery run
-`bash scripts/fork/check-up-branch.sh`. The latter is offline: refresh refs first.
+`bash scripts/fork/check-up-branch.sh`. The latter is offline: first refresh both
+remotes with `git fetch --multiple origin upstream`.
 Its optional `[base]` selects the diff base (default `upstream/main`); its
 merge-base must be upstream history. It also rejects any ancestor reachable
 from `origin/main` but not `upstream/main`, including reverted fork commits.
 This checks history and changed paths, not uncommitted work; it requires a clean tree.
+
+To move `adi/*` work upstream, use `git cherry-pick -x` of the non-merge commits
+onto a fresh `up/*` branch, dropping fork-only files from the cherry-picked set.
 
 Follow upstream conventions: a `changelog.d` fragment, touched-component
 `task gate:<component>` slices, knip/deadcode zero-unused, and an ADR/PRD for new
@@ -72,8 +76,9 @@ bash scripts/fork/sync-upstream.sh
 
 The sync helper fetches both main branches, prints ahead/behind counts, and exits
 with `in sync` if upstream is already contained. Otherwise it creates the dated
-branch and a merge commit. A conflict is aborted; the branch is retained for
-inspection. An existing dated branch is refused; inspect it rather than overwrite it.
+branch and a merge commit. A conflict is aborted, the original branch or detached
+commit is restored, and the empty sync branch is safely deleted. An existing dated
+branch is refused; inspect it rather than overwrite it.
 To prepare and push in one authorized run, use instead:
 
 ```sh
@@ -86,4 +91,6 @@ If the branch was already prepared locally, push that exact branch with
 `git push origin sync/upstream-YYYYMMDD` after authorization. Review the PR and
 have the owner merge it with a merge commit. The helper never pushes `main` or
 upstream, and only prints the PR command. `SYNC_DATE=YYYYMMDD` overrides the date
-for tests. Fork-only hygiene changes do not ship a changelog fragment.
+for tests. `FORK_ORIGIN_PATTERN` overrides the origin URL ERE for file:// tests;
+by default every origin fetch and push URL must identify `adibirzu/uzi` on GitHub
+and differ from upstream's fetch URL. Fork-only hygiene changes do not ship a changelog fragment.
