@@ -482,6 +482,8 @@ export interface RegisterRequest {
    *  interlocked run. Sent only when non-empty (same "only send when known" shape as
    *  `capabilities`); the api Filter-s it against a server-owned protocol vocabulary. */
   protocol_capabilities?: string[];
+  /** Opaque, non-secret identity of a ready worker-host Codex source. */
+  codex_host_source?: { source_id: string; source_revision: number; ready: boolean };
   /**
    * PRD #1391 Run B M4: the worker's active-run snapshot, carried ON the register request so a
    * worker holding pending terminal outcomes leases them BEFORE the api's register-time orphan
@@ -817,6 +819,8 @@ export interface DindMaintenanceReadyACK extends DindMaintenance {
 }
 
 export interface HeartbeatRequest {
+	/** Repeated opaque host-source readiness; no credential material. */
+	codex_host_source?: { source_id: string; source_revision: number; ready: boolean };
   /** Original implemented capabilities and fixed validated local limits, echoed with the
    * original canonical registration nonce once heartbeat_protocol_refresh_v1 is advertised.
    * Complete readable responses up to 1 MiB with all-string lists replace API features; discovery and
@@ -984,7 +988,10 @@ export type ClaimCodexSecrets =
       chatgpt_account_id: string;
       chatgpt_plan_type: null;
     }
-  | { auth_mode: "api_key"; access_token: string; capability: string };
+  | { auth_mode: "api_key"; access_token: string; capability: string }
+  // `never` members preserve structural access in legacy call sites; host claim JSON
+  // contains none of them and selection consumes this arm before any such path runs.
+  | { auth_mode: "subscription"; codex_credential_source: { kind: "worker_host"; source_id: string; source_revision: number }; access_token: never; capability: never; generation: never; chatgpt_account_id: never; chatgpt_plan_type: never };
 
 /**
  * Request body for POST /worker/runs/{id}/codex/release (PRD #1171 M1). The run id is the

@@ -1078,6 +1078,7 @@ export class Worker {
           // gate. The API holds a custom-root Codex run for a worker that lacks it.
           protocolCapabilities.push(CODEX_CUSTOM_MODEL_CAPABILITY);
         }
+		if (this.config.codexHostSource?.ready) protocolCapabilities.push("codex_host_login_v1");
         // issue #3639: the settlement capability rides only with the pressure capability (the same guard), so a worker
         // that cannot park for memory never offers to deliver a settlement receipt.
         if (this.config.memoryGuard?.enabled) protocolCapabilities.push("worker_memory_pressure_v1", "worker_memory_authority_claim_v1", "memory_park_settlement_v1");
@@ -1101,6 +1102,7 @@ export class Worker {
           protocolCapabilities,
           initialSnapshot,
           this.config.crossCheckSlots,
+		  this.config.codexHostSource,
         );
         // Shutdown has already revoked the pending registration. Its late reply
         // must neither start loops nor turn normal cancellation into a capability error.

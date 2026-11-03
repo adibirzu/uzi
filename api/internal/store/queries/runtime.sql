@@ -198,6 +198,15 @@ LEFT JOIN user_secrets s ON s.id = w.anthropic_secret_id AND s.user_id = w.user_
 LEFT JOIN worker_upgrade_reports rh ON rh.worker_id = w.id
 WHERE w.user_id = @user_id AND w.id = @worker_id;
 
+-- name: SetWorkerCodexHostSource :execrows
+-- Non-secret registration metadata only.  A missing source clears readiness.
+UPDATE workers
+SET codex_host_source_id = sqlc.narg('source_id')::text,
+    codex_host_source_revision = sqlc.narg('source_revision')::bigint,
+    codex_host_source_ready = COALESCE(sqlc.narg('ready')::boolean, false),
+    updated_at = now()
+WHERE id = @id;
+
 -- name: RegisterWorker :one
 -- Worker announces version + its self-reported template and comes online;
 -- heartbeat is stamped now. template_reported is what the image bakes in (PRD
@@ -269,6 +278,9 @@ WITH prev AS (
         -- slice from any caller (pgx encodes a nil []string as SQL NULL): a nil report
         -- stores '{}', not NULL.
         protocol_capabilities = COALESCE(@protocol_capabilities::text[], '{}'),
+		codex_host_source_id = sqlc.narg('codex_host_source_id')::text,
+		codex_host_source_revision = sqlc.narg('codex_host_source_revision')::bigint,
+		codex_host_source_ready = COALESCE(sqlc.narg('codex_host_source_ready')::boolean, false),
         max_concurrent_runs = sqlc.narg('max_concurrent_runs'),
         max_cross_check_slots = sqlc.narg('max_cross_check_slots'),
         -- online_since is the api-owned uptime anchor (PRD #251 M1): PRESERVE it if the
@@ -1309,6 +1321,15 @@ WITH checker_template_pins AS MATERIALIZED (
       -- workers.protocol_capabilities, passed by the Go caller).
       AND (NOT (r.harness = 'codex' OR r.codex_material_revision IS NOT NULL OR r.codex_secret_id IS NOT NULL)
            OR ('codex_harness_v1' = ANY(@worker_protocol_caps::text[]) AND 'codex_runtime_v2' = ANY(@worker_protocol_caps::text[])))
+		-- A worker-host binding is an exact placement constraint, deliberately separate
+		-- from normal Codex capability routing.  A missing/unready source stays queued;
+		-- it can never fall through to a server-held account on another worker.
+		AND (r.codex_credential_source_kind IS DISTINCT FROM 'worker_host'
+		     OR EXISTS (SELECT 1 FROM claimant c
+		                WHERE c.codex_host_source_ready
+		                  AND c.codex_host_source_id = r.codex_credential_source_id
+		                  AND c.codex_host_source_revision = r.codex_credential_source_revision
+		                  AND 'codex_host_login_v1' = ANY(c.protocol_capabilities)))
       -- Interlocked Codex turns require the newer completion loop, independently of overrides.
       AND (r.completion_contract_version IS NULL
            OR NOT (r.harness = 'codex' OR r.codex_material_revision IS NOT NULL OR r.codex_secret_id IS NOT NULL)

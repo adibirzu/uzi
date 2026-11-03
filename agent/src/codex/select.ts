@@ -58,7 +58,7 @@ export type CodexBinding = CodexBindingBase &
 
 /** The dark selection decision. `claude` is the exact legacy Claude path (absence);
  *  `codex` carries a validated binding (a complete server-owned Codex block). */
-export type CodexSelection = { kind: "claude" } | { kind: "codex"; binding: CodexBinding };
+export type CodexSelection = { kind: "claude" } | { kind: "codex"; binding: CodexBinding } | { kind: "worker_host"; sourceId: string; sourceRevision: number };
 
 // --- Bounded, secret-free failure ---------------------------------------------
 
@@ -139,6 +139,17 @@ export function selectCodexBinding(claim: CodexClaimView): CodexSelection {
   // that is not a complete server-owned binding (including a stray `null`, a
   // non-object, or an object missing/mistyping a field) throws here rather than
   // degrading to Claude.
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    const record = raw as Record<string, unknown>;
+    if (record.codex_credential_source !== undefined) {
+      const source = record.codex_credential_source;
+      if (record.auth_mode !== "subscription" || typeof source !== "object" || source === null || Array.isArray(source)) throw new CodexSelectionError("invalid_auth_mode");
+      const s = source as Record<string, unknown>;
+      if (s.kind !== "worker_host" || typeof s.source_id !== "string" || s.source_id.length === 0 ||
+        typeof s.source_revision !== "number" || !Number.isSafeInteger(s.source_revision) || s.source_revision <= 0 || Object.keys(record).length !== 2) throw new CodexSelectionError("invalid_auth_mode");
+      return { kind: "worker_host", sourceId: s.source_id, sourceRevision: s.source_revision };
+    }
+  }
   return { kind: "codex", binding: validateCodexBinding(raw) };
 }
 

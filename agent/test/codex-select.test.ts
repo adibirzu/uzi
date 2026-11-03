@@ -51,6 +51,21 @@ describe("selectCodexBinding: absence takes the exact Claude path", () => {
   });
 });
 
+describe("selectCodexBinding: worker-host source", () => {
+  it("accepts only the metadata-only host arm", () => {
+    const claim = { codex: { auth_mode: "subscription", codex_credential_source: {
+      kind: "worker_host", source_id: "11111111-1111-4111-8111-111111111111", source_revision: 1,
+    } } };
+    assert.deepEqual(selectCodexBinding(claim), { kind: "worker_host", sourceId: "11111111-1111-4111-8111-111111111111", sourceRevision: 1 });
+  });
+
+  it("rejects a host arm with server credential material rather than falling back", () => {
+    assert.throws(() => selectCodexBinding({ codex: { auth_mode: "subscription", access_token: SECRET_TOKEN, codex_credential_source: {
+      kind: "worker_host", source_id: "11111111-1111-4111-8111-111111111111", source_revision: 1,
+    } } }), CodexSelectionError);
+  });
+});
+
 describe("selectCodexBinding: a complete, valid block selects Codex", () => {
   it("subscription (nonnegative safe-integer generation) → codex; authMode subscription; canRefresh true", () => {
     const subCodex: ClaimCodexSecrets = {

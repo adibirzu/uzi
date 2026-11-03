@@ -1265,6 +1265,9 @@ type Run struct {
 	HarnessOtherMeasured          pgtype.Float8      `json:"harness_other_measured"`
 	HarnessPreferredHeld          pgtype.Bool        `json:"harness_preferred_held"`
 	HarnessOtherHeld              pgtype.Bool        `json:"harness_other_held"`
+	CodexCredentialSourceKind     pgtype.Text        `json:"codex_credential_source_kind"`
+	CodexCredentialSourceID       pgtype.Text        `json:"codex_credential_source_id"`
+	CodexCredentialSourceRevision pgtype.Int8        `json:"codex_credential_source_revision"`
 	HarnessPreferredWeeklyResetAt pgtype.Timestamptz `json:"harness_preferred_weekly_reset_at"`
 	HarnessOtherWeeklyResetAt     pgtype.Timestamptz `json:"harness_other_weekly_reset_at"`
 }
@@ -1906,6 +1909,9 @@ type Worker struct {
 	ManualCordonedBy         pgtype.UUID        `json:"manual_cordoned_by"`
 	ManualCordonedByLabel    pgtype.Text        `json:"manual_cordoned_by_label"`
 	ManualCordonReason       pgtype.Text        `json:"manual_cordon_reason"`
+	CodexHostSourceID        pgtype.Text        `json:"codex_host_source_id"`
+	CodexHostSourceRevision  pgtype.Int8        `json:"codex_host_source_revision"`
+	CodexHostSourceReady     bool               `json:"codex_host_source_ready"`
 }
 
 type WorkerActiveRun struct {

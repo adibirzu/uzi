@@ -14,6 +14,7 @@ import type { SummaryRunner } from "../src/summary-runner.js";
 import { buildChatExecutor, buildRunExecutor, type BuildRunExecutorDeps } from "../src/main.js";
 import { ChatExecutor } from "../src/chat-executor.js";
 import type { ClaimCodexSecrets } from "../src/protocol.js";
+import type { HostCodexCredentialSource } from "../src/codex/host-credential-source.js";
 
 // PRD #1429 M6 — the harness-neutral e2e stub seam (`agent/src/main.ts`).
 //
@@ -42,6 +43,11 @@ const VALID_SUBSCRIPTION_CODEX: ClaimCodexSecrets = {
 
 const SDK_HOME_ROOT = path.join(os.tmpdir(), "uzi-main-executor-select-test");
 
+const HOST_CLAIM = {
+  auth_mode: "subscription",
+  codex_credential_source: { kind: "worker_host", source_id: "11111111-1111-4111-8111-111111111111", source_revision: 1 },
+} as unknown as ClaimCodexSecrets;
+
 function baseDeps(overrides: Partial<BuildRunExecutorDeps> = {}): BuildRunExecutorDeps {
   return {
     log: nullLogger(),
@@ -58,6 +64,25 @@ function baseDeps(overrides: Partial<BuildRunExecutorDeps> = {}): BuildRunExecut
     ...overrides,
   };
 }
+
+it("worker-host binding shadows release and refresh on the WorkerClient", async () => {
+  let reads = 0;
+	let workerClientCalls = 0;
+  const source: HostCodexCredentialSource = {
+    kind: "worker_host", sourceId: "11111111-1111-4111-8111-111111111111", sourceRevision: 1,
+    read: () => { reads++; return { accessToken: "SENTINEL-ACCESS-0001", refreshToken: "SENTINEL-REFRESH-0001", accountId: "sentinel-account" }; },
+  };
+  const deps = baseDeps({ hostCodexSource: source });
+  deps.client.releaseCodex = async () => { workerClientCalls++; throw new Error("server release must not run"); };
+  deps.client.refreshCodex = async () => { workerClientCalls++; throw new Error("server refresh must not run"); };
+  const result = buildRunExecutor("run-host", HOST_CLAIM, deps);
+  assert.ok(result.executor instanceof CodexExecutor);
+  const executor = result.executor as unknown as { opts: { client: WorkerClient } };
+  const response = await executor.opts.client.releaseCodex("run-host", { capability: "ignored" }, { authMode: "subscription", chatgptAccountId: "sentinel-account", minimumGeneration: 0 });
+  assert.equal(response.access_token, "SENTINEL-ACCESS-0001");
+  assert.ok(reads >= 2, "local source supplied the initial and released token");
+	assert.equal(workerClientCalls, 0, "worker-host source never calls /codex/release or /codex/refresh");
+});
 
 it("2833 forwards shared advice factory to Codex summary runner while stub stays inert", async () => {
   const builds: CodexAdviceHarnessBuildParams[] = [];

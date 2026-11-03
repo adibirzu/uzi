@@ -4,6 +4,20 @@
 -- Companion schema: 00202 (runs.codex_* columns), 00201 (codex_refresh_intent),
 -- 00199/00200 (codex_provider_account / codex_credential_state).
 
+-- name: FreezeRunCodexHostBinding :execrows
+-- Atomically freezes non-secret placement metadata for a worker-host login.  This
+-- deliberately does not touch codex_secret_id or any sealed-login columns.
+UPDATE runs
+SET harness = 'codex',
+    codex_credential_source_kind = 'worker_host',
+    codex_credential_source_id = @source_id::text,
+    codex_credential_source_revision = @source_revision::bigint,
+    updated_at = now()
+WHERE id = @id AND user_id = @user_id
+  AND codex_secret_id IS NULL
+  AND codex_material_revision IS NULL
+  AND codex_credential_source_kind IS NULL;
+
 -- name: FreezeRunCodexBinding :execrows
 -- Freeze a run's Codex binding at creation (PRD #1147 M2), via an internal create path
 -- rather than the public CreateRun — the binding is decided once, atomically, when the
@@ -58,6 +72,7 @@ SET codex_secret_id         = @secret_id::uuid,
     codex_account_revision  = COALESCE(codex_account_revision, sqlc.narg('account_revision')::bigint),
     updated_at              = now()
 WHERE id = @id AND user_id = @user_id
+	AND codex_credential_source_kind IS NULL
     AND (
         codex_material_revision IS NULL
         OR (
