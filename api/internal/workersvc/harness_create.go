@@ -44,6 +44,9 @@ var (
 	// codex_account_mode 'auto' whose configured pool has no bindable alias. It wraps ErrNoCredentialForHarness (still refused, never a fallback); the
 	// scheduler maps it to the codex_pool_unavailable skip and the handlers add the typed reason.
 	ErrCodexPoolUnavailable = errCodexPoolUnavailable
+	// ErrHostCodexSourceUnavailable means no ready worker owned by the caller
+	// currently advertises the requested opaque host-source revision.
+	ErrHostCodexSourceUnavailable = errHostCodexSourceUnavailable
 )
 
 // RawCredentialOverride is an UNVALIDATED create-time credential-override request threaded from

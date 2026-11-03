@@ -54,7 +54,13 @@ import { landlockProbeForMode, resolveCodexHarnessAvailability } from "./codex/c
 import { openHostCodexCredentialSource, type HostCodexCredentialSource } from "./codex/host-credential-source.js";
 import { reapCodexCommandOrphans, type ReapOrphansResult } from "./codex/launcher.js";
 import { SECRET_PATH_PREFIXES, workerSecretDenyPaths } from "./guardrails.js";
-import type { ClaimCodexSecrets } from "./protocol.js";
+import type {
+  ClaimCodexSecrets,
+  CodexRefreshRequest,
+  CodexRefreshResponse,
+  CodexReleaseRequest,
+  CodexReleaseResponse,
+} from "./protocol.js";
 import type { CommandSandboxMode } from "./config.js";
 import { ensureRunnerTmpdir } from "./runner-tmpdir.js";
 import { createPodEpoch, restoreEpochRuntimeTmpdir } from "./pod-epoch-lock.js";
@@ -301,20 +307,54 @@ export function buildRunExecutor(runId: string, codex: ClaimCodexSecrets | undef
     return { executor: new StubExecutor(log, { planGate: stubPlanGate, homeDir: sdkHomeRoot }) };
   }
 
-  let codexClient = client;
+  let codexClient: Pick<WorkerClient, "releaseCodex" | "refreshCodex"> = client;
   if (selection.kind === "worker_host") {
     const source = deps.hostCodexSource;
     if (!source || source.sourceId !== selection.sourceId || source.sourceRevision !== selection.sourceRevision) {
       return { executor: new FailClosedExecutor("worker-host Codex source is unavailable") };
     }
     let login;
-    try { login = source.read(); } catch { return { executor: new FailClosedExecutor("worker-host Codex source is unavailable") }; }
-    // The existing executor is intentionally reused, but its credential-operation
-    // bridge is local for this arm.  These overrides make /codex/release and
-    // /codex/refresh unreachable for worker-host claims.
-    codexClient = Object.create(client) as WorkerClient;
-    codexClient.releaseCodex = async () => ({ auth_mode: "subscription", access_token: source.read().accessToken, generation: 0, chatgpt_account_id: source.read().accountId, chatgpt_plan_type: null });
-    codexClient.refreshCodex = async () => ({ auth_mode: "subscription", access_token: source.read().accessToken, generation: 0, chatgpt_account_id: source.read().accountId, chatgpt_plan_type: null, outcome: "reconciled" as const });
+    try {
+      login = source.read();
+    } catch {
+      return { executor: new FailClosedExecutor("worker-host Codex source is unavailable") };
+    }
+    // An explicit, narrow local bridge — never clone WorkerClient, because cloned
+    // mutable client state can silently diverge. This path has no API release or
+    // refresh authority. `release` also refreshes near-expiry JWTs before use.
+    codexClient = {
+      async releaseCodex(
+        _runID: string,
+        _request: CodexReleaseRequest,
+        _expected: unknown,
+        signal?: AbortSignal,
+      ): Promise<CodexReleaseResponse> {
+        const current = await source.release(signal);
+        return {
+          auth_mode: "subscription",
+          access_token: current.accessToken,
+          generation: 0,
+          chatgpt_account_id: current.accountId,
+          chatgpt_plan_type: null,
+        };
+      },
+      async refreshCodex(
+        _runID: string,
+        _request: CodexRefreshRequest,
+        _expected: unknown,
+        signal?: AbortSignal,
+      ): Promise<CodexRefreshResponse> {
+        const current = await source.refresh(signal);
+        return {
+          auth_mode: "subscription",
+          access_token: current.accessToken,
+          generation: 0,
+          chatgpt_account_id: current.accountId,
+          chatgpt_plan_type: null,
+          outcome: "reconciled",
+        };
+      },
+    };
     selection = { kind: "codex", binding: { authMode: "subscription" as const, accessToken: login.accessToken, capability: "worker_host", generation: 0, chatgptAccountId: login.accountId, chatgptPlanType: null } as import("./codex/select.js").CodexBinding };
   }
 
@@ -329,7 +369,8 @@ export function buildRunExecutor(runId: string, codex: ClaimCodexSecrets | undef
         binding: selection.binding,
         summaryClaimCodex: codex,
         codexAdviceHarnessFactory: deps.codexAdviceHarnessFactory,
-        client: codexClient,
+        client,
+        ...(selection.kind === "codex" && codexClient !== client ? { credentialBridge: codexClient } : {}),
         provider: CODEX_PRODUCTION_PROVIDER,
         // The nix/devbox provisioning HOME + root stay SHARED worker-lifetime paths
         // (Decision 5): only the per-run Codex $HOME (runHome) is per-run, so warm-start
@@ -472,7 +513,12 @@ async function mainBody(): Promise<void> {
   if (config.codexCredentialSource.kind === "worker_host") {
     const source = openHostCodexCredentialSource(config.codexCredentialSource.home, config.dataDir);
 	  hostCodexSource = source;
-	config.codexHostSource = { sourceId: source.sourceId, sourceRevision: source.sourceRevision, ready: true };
+    config.codexHostSource = {
+      sourceId: source.sourceId,
+      sourceRevision: source.sourceRevision,
+      ready: source.ready(),
+    };
+    config.codexHostReadiness = () => source.ready();
     log.info("host Codex credential source validated", {
       source_kind: source.kind,
       source_revision: source.sourceRevision,

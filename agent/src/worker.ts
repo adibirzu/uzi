@@ -1078,7 +1078,12 @@ export class Worker {
           // gate. The API holds a custom-root Codex run for a worker that lacks it.
           protocolCapabilities.push(CODEX_CUSTOM_MODEL_CAPABILITY);
         }
-		if (this.config.codexHostSource?.ready) protocolCapabilities.push("codex_host_login_v1");
+        if (this.config.codexHostSource) {
+          this.config.codexHostSource.ready = this.config.codexHostReadiness?.() ?? false;
+        }
+        if (this.config.codexHostSource?.ready) {
+          protocolCapabilities.push("codex_host_login_v1");
+        }
         // issue #3639: the settlement capability rides only with the pressure capability (the same guard), so a worker
         // that cannot park for memory never offers to deliver a settlement receipt.
         if (this.config.memoryGuard?.enabled) protocolCapabilities.push("worker_memory_pressure_v1", "worker_memory_authority_claim_v1", "memory_park_settlement_v1");
@@ -1180,6 +1185,11 @@ export class Worker {
       const sentAtMs = Date.now();
       let sampledAtMs: number | undefined;
       try {
+        // Revalidate the dedicated host source every heartbeat. A deleted, swapped,
+        // malformed or re-login-needed file becomes unready before the next claim.
+        if (this.config.codexHostSource) {
+          this.config.codexHostSource.ready = this.config.codexHostReadiness?.() ?? false;
+        }
         // PRD #1391 M5: report per-run outbox depth alongside the resource sample. The
         // client sends the array only when the server negotiated `heartbeat_outbox`,
         // so an older api sees a byte-identical heartbeat. Assembled BEFORE the send so

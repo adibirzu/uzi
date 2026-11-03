@@ -65,23 +65,64 @@ function baseDeps(overrides: Partial<BuildRunExecutorDeps> = {}): BuildRunExecut
   };
 }
 
-it("worker-host binding shadows release and refresh on the WorkerClient", async () => {
+it("worker-host binding owns proactive release and never calls WorkerClient credentials", async () => {
   let reads = 0;
-	let workerClientCalls = 0;
+  let localReleaseCalls = 0;
+  let localRefreshCalls = 0;
+  let workerClientCalls = 0;
   const source: HostCodexCredentialSource = {
-    kind: "worker_host", sourceId: "11111111-1111-4111-8111-111111111111", sourceRevision: 1,
-    read: () => { reads++; return { accessToken: "SENTINEL-ACCESS-0001", refreshToken: "SENTINEL-REFRESH-0001", accountId: "sentinel-account" }; },
+    kind: "worker_host",
+    sourceId: "11111111-1111-4111-8111-111111111111",
+    sourceRevision: 1,
+    read: () => {
+      reads++;
+      return {
+        accessToken: "SENTINEL-ACCESS-0001",
+        refreshToken: "SENTINEL-REFRESH-0001",
+        accountId: "sentinel-account",
+      };
+    },
+    ready: () => true,
+    release: async () => {
+      localReleaseCalls++;
+      return {
+        accessToken: "SENTINEL-ACCESS-REFRESHED",
+        refreshToken: "SENTINEL-REFRESH-0001",
+        accountId: "sentinel-account",
+      };
+    },
+    refresh: async () => {
+      localRefreshCalls++;
+      return {
+        accessToken: "SENTINEL-ACCESS-REFRESHED",
+        refreshToken: "SENTINEL-REFRESH-0001",
+        accountId: "sentinel-account",
+      };
+    },
   };
   const deps = baseDeps({ hostCodexSource: source });
   deps.client.releaseCodex = async () => { workerClientCalls++; throw new Error("server release must not run"); };
   deps.client.refreshCodex = async () => { workerClientCalls++; throw new Error("server refresh must not run"); };
   const result = buildRunExecutor("run-host", HOST_CLAIM, deps);
   assert.ok(result.executor instanceof CodexExecutor);
-  const executor = result.executor as unknown as { opts: { client: WorkerClient } };
-  const response = await executor.opts.client.releaseCodex("run-host", { capability: "ignored" }, { authMode: "subscription", chatgptAccountId: "sentinel-account", minimumGeneration: 0 });
-  assert.equal(response.access_token, "SENTINEL-ACCESS-0001");
-  assert.ok(reads >= 2, "local source supplied the initial and released token");
-	assert.equal(workerClientCalls, 0, "worker-host source never calls /codex/release or /codex/refresh");
+  const executor = result.executor as unknown as {
+    opts: { credentialBridge: Pick<WorkerClient, "releaseCodex" | "refreshCodex"> };
+  };
+  const response = await executor.opts.credentialBridge.releaseCodex(
+    "run-host",
+    { capability: "ignored" },
+    { authMode: "subscription", chatgptAccountId: "sentinel-account", minimumGeneration: 0 },
+  );
+  assert.equal(response.access_token, "SENTINEL-ACCESS-REFRESHED");
+  await executor.opts.credentialBridge.refreshCodex(
+    "run-host",
+    { capability: "ignored", operation_id: "fixture-operation", observed_generation: 0 },
+    { authMode: "subscription", chatgptAccountId: "sentinel-account" },
+  );
+  assert.equal(reads, 1, "the initial binding reads once; the explicit bridge owns later releases");
+  assert.equal(localReleaseCalls, 1, "initial executor release delegates to local proactive refresh owner");
+  assert.equal(localRefreshCalls, 1);
+  assert.equal(workerClientCalls, 0, "worker-host source never calls /codex/release or /codex/refresh");
 });
 
 it("2833 forwards shared advice factory to Codex summary runner while stub stays inert", async () => {

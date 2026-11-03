@@ -9108,6 +9108,32 @@ func (q *Queries) GetWorkerProjectionForOwner(ctx context.Context, arg GetWorker
 	return i, err
 }
 
+const hasReadyWorkerCodexHostSource = `-- name: HasReadyWorkerCodexHostSource :one
+SELECT EXISTS (
+    SELECT 1 FROM workers
+    WHERE user_id = $1
+      AND codex_host_source_ready
+      AND codex_host_source_id = $2::text
+      AND codex_host_source_revision = $3::bigint
+      AND 'codex_host_login_v1' = ANY(protocol_capabilities)
+)
+`
+
+type HasReadyWorkerCodexHostSourceParams struct {
+	UserID         uuid.UUID `json:"user_id"`
+	SourceID       string    `json:"source_id"`
+	SourceRevision int64     `json:"source_revision"`
+}
+
+// Create-time admission only: a later loss holds the run queued rather than
+// silently substituting a server-held credential.
+func (q *Queries) HasReadyWorkerCodexHostSource(ctx context.Context, arg HasReadyWorkerCodexHostSourceParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasReadyWorkerCodexHostSource, arg.UserID, arg.SourceID, arg.SourceRevision)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const heartbeatWorker = `-- name: HeartbeatWorker :one
 UPDATE workers SET
     status                = 'online',

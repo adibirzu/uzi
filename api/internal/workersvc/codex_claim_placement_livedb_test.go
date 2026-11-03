@@ -130,6 +130,107 @@ func TestClaimOrdinaryClaudeRunUnaffectedByCodexGateLiveDB(t *testing.T) {
 	}
 }
 
+// TestClaimWorkerHostCodexSourcePlacementLiveDB keeps the host-owned source as a
+// hard exact-worker gate. It uses ClaimRun's generated SQL against Postgres because
+// the EXISTS predicate cannot be meaningfully proven by a fake store.
+func TestClaimWorkerHostCodexSourcePlacementLiveDB(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		ready      bool
+		revision   int64
+		capability bool
+		owner      bool
+		wantClaim  bool
+	}{
+		{"own ready exact source", true, 7, true, true, true},
+		{"unready source", false, 7, true, true, false},
+		{"revision mismatch", true, 8, true, true, false},
+		{"other worker owns source", true, 7, true, false, false},
+		{"host capability absent", true, 7, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setupInterlockLiveDB(t)
+			caps := []string{capability.CodexHarnessV1, capability.CodexRuntimeV2}
+			if tc.capability {
+				caps = append(caps, capability.CodexHostLoginV1)
+			}
+			claimant := e.seedWorker(t, caps)
+			owner := claimant
+			if !tc.owner {
+				owner = e.seedWorker(t, append(caps, capability.CodexHostLoginV1))
+			}
+			sourceID := uuid.NewString()
+			e.exec(t, `UPDATE workers
+			           SET codex_host_source_id=$2, codex_host_source_revision=$3, codex_host_source_ready=$4
+			           WHERE id=$1`, owner, sourceID, int64(7), tc.ready)
+			runID := e.seedCodexQueuedRun(t)
+			e.exec(t, `UPDATE runs
+			           SET codex_credential_source_kind='worker_host',
+			               codex_credential_source_id=$2,
+			               codex_credential_source_revision=$3
+			           WHERE id=$1`, runID, sourceID, tc.revision)
+
+			run, err := e.q.ClaimRun(e.ctx, e.claimParams(claimant, caps, false))
+			if tc.wantClaim {
+				if err != nil {
+					t.Fatalf("own ready source must claim: %v", err)
+				}
+				if run.ID != runID {
+					t.Fatalf("claimed %v, want %v", run.ID, runID)
+				}
+				return
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatalf("host-gated run claimed by ineligible worker: run=%v err=%v", run.ID, err)
+			}
+			if status := e.runStatus(t, runID); status != "queued" {
+				t.Fatalf("blocked host run status=%q, want queued", status)
+			}
+		})
+	}
+}
+
+func TestHasReadyWorkerCodexHostSourceLiveDB(t *testing.T) {
+	e := setupInterlockLiveDB(t)
+	readySource := uuid.NewString()
+	unreadySource := uuid.NewString()
+	noCapabilitySource := uuid.NewString()
+	ready := e.seedWorker(t, []string{capability.CodexHostLoginV1})
+	unready := e.seedWorker(t, []string{capability.CodexHostLoginV1})
+	noCapability := e.seedWorker(t, nil)
+	e.exec(t, `UPDATE workers SET codex_host_source_id=$2, codex_host_source_revision=3,
+	           codex_host_source_ready=true WHERE id=$1`, ready, readySource)
+	e.exec(t, `UPDATE workers SET codex_host_source_id=$2, codex_host_source_revision=3,
+	           codex_host_source_ready=false WHERE id=$1`, unready, unreadySource)
+	e.exec(t, `UPDATE workers SET codex_host_source_id=$2, codex_host_source_revision=3,
+	           codex_host_source_ready=true WHERE id=$1`, noCapability, noCapabilitySource)
+	for _, tc := range []struct {
+		name string
+		user uuid.UUID
+		id   string
+		rev  int64
+		want bool
+	}{
+		{"ready own source", e.userID, readySource, 3, true},
+		{"unready source", e.userID, unreadySource, 3, false},
+		{"revision mismatch", e.userID, readySource, 2, false},
+		{"other owner", uuid.New(), readySource, 3, false},
+		{"missing capability", e.userID, noCapabilitySource, 3, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := e.q.HasReadyWorkerCodexHostSource(e.ctx, store.HasReadyWorkerCodexHostSourceParams{
+				UserID: tc.user, SourceID: tc.id, SourceRevision: tc.rev,
+			})
+			if err != nil {
+				t.Fatalf("HasReadyWorkerCodexHostSource: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ready=%t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestClaimCodexPeerSpreadMirrorLiveDB covers the D3 peer fleet-spread MIRROR clause. Fleet-aware
 // spread (PRD #216) defers a queued run to a strictly-better idle peer instead of a busy claimant
 // taking it — but for a CODEX-INDICATING run that peer must ALSO advertise codex_harness_v1, or the

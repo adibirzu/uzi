@@ -272,6 +272,8 @@ export interface Config {
   codexCredentialSource: CodexCredentialSource;
   /** Non-secret registration metadata populated only after host custody preflight. */
   codexHostSource?: { sourceId: string; sourceRevision: number; ready: boolean };
+  /** Local-only revalidation hook; never serialized and never invoked by model code. */
+  codexHostReadiness?: () => boolean;
   /**
    * Issue #3675: the measured size (bytes) at which a run's Codex command cache is
    * rotated to a fresh generation (UZI_CODEX_COMMAND_CACHE_RUN_BYTES). Parsed strictly;

@@ -192,11 +192,20 @@ back to an imported server credential or API key. The worker's local bridge
 re-reads the dedicated file on each credential operation and never calls the
 API's Codex release or refresh routes for this source.
 
-This is experimental. It does not yet provide host meter reports, source-aware
-parking/cooldown admission, Mini native deployment, or a UID-split deployment
-recipe. Refresh relies on the dedicated Codex file being maintained by the
-local Codex app-server/login flow; uzi does not perform a provider refresh or
-write a login file itself. See ADR-3751 for rollout constraints.
+This is experimental. One worker process owns proactive local refresh: it
+uses the same OAuth endpoint, public client id, JSON request and timeout policy
+as `api/internal/codexauth`, coalesces in-process requests, and serializes
+processes with an owner-only sidecar lock. It rechecks the file under that lock
+before a network call, adopts a newer CLI write, and otherwise atomically
+renames a `0600` replacement that preserves unknown Codex fields and a rotated
+refresh token. Do not run an interactive CLI against this dedicated home while
+uzi owns it. `invalid_grant`/401 closes the source for re-login; an ambiguous
+reply is not retried blindly. The API source becomes unready on each heartbeat
+when file validation fails, so later runs stay queued.
+
+It does not yet provide host meter reports, source-aware parking/cooldown
+admission, Mini native deployment, or a UID-split deployment recipe. See
+ADR-3751 for rollout constraints.
 
 ## Status legend
 

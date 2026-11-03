@@ -319,7 +319,7 @@ func (h *Handler) WorkerRegister(w http.ResponseWriter, r *http.Request) {
 	// accept it unless this worker also advertises the protocol that consumes it.
 	if req.CodexHostSource != nil {
 		source := req.CodexHostSource
-		if _, parseErr := uuid.Parse(source.SourceID); parseErr != nil || source.SourceRevision <= 0 || !source.Ready || !slices.Contains(capability.FilterProtocol(req.ProtocolCapabilities), capability.CodexHostLoginV1) {
+		if _, parseErr := uuid.Parse(source.SourceID); parseErr != nil || source.SourceRevision <= 0 || (source.Ready && !slices.Contains(capability.FilterProtocol(req.ProtocolCapabilities), capability.CodexHostLoginV1)) {
 			httpx.Error(w, http.StatusBadRequest, "invalid codex_host_source")
 			return
 		}
@@ -329,12 +329,6 @@ func (h *Handler) WorkerRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := h.q.SetWorkerCodexHostSource(r.Context(), store.SetWorkerCodexHostSourceParams{ID: wkr.ID, SourceID: pgconv.Text(source.SourceID), SourceRevision: pgconv.Int8Ptr(&source.SourceRevision), Ready: pgconv.BoolPtr(&source.Ready)}); err != nil {
 			slog.Error("worker host Codex source", "error", err)
-			httpx.Error(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-	} else if h.q != nil {
-		if _, err := h.q.SetWorkerCodexHostSource(r.Context(), store.SetWorkerCodexHostSourceParams{ID: wkr.ID}); err != nil {
-			slog.Error("worker host Codex source clear", "error", err)
 			httpx.Error(w, http.StatusInternalServerError, "internal error")
 			return
 		}
@@ -611,7 +605,7 @@ func (h *Handler) WorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if source := req.CodexHostSource; source != nil {
-		if _, parseErr := uuid.Parse(source.SourceID); parseErr != nil || source.SourceRevision <= 0 || !source.Ready || h.q == nil {
+		if _, parseErr := uuid.Parse(source.SourceID); parseErr != nil || source.SourceRevision <= 0 || h.q == nil {
 			httpx.Error(w, http.StatusBadRequest, "invalid codex_host_source")
 			return
 		}

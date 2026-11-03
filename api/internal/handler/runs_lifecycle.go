@@ -176,8 +176,8 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 			httpx.Error(w, http.StatusBadRequest, "codex_credential_source requires harness codex")
 			return
 		}
-		h := workersvc.HarnessCodex
-		explicit = &h
+		codexHarness := workersvc.HarnessCodex
+		explicit = &codexHarness
 		r = r.WithContext(workersvc.WithHostCodexSource(r.Context(), workersvc.HostCodexSource{ID: source.SourceID, Revision: source.SourceRevision}))
 	}
 
@@ -437,6 +437,8 @@ func (h *Handler) writeStartRunError(w http.ResponseWriter, r *http.Request, err
 		})
 	case errors.Is(err, workersvc.ErrCodexPoolUnavailable):
 		httpx.JSON(w, http.StatusUnprocessableEntity, codexPoolUnavailableBody())
+	case errors.Is(err, workersvc.ErrHostCodexSourceUnavailable):
+		httpx.Error(w, http.StatusConflict, "the selected worker-host Codex source is not ready")
 	case errors.Is(err, workersvc.ErrNoCredentialForHarness):
 		// PRD #1429 M2 (D2): an EXPLICIT harness (request or pin) whose credential is unusable —
 		// 422 with the stable no_credential_for_harness classification. Never falls back.
