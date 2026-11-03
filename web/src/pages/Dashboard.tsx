@@ -149,14 +149,14 @@ export function Dashboard() {
     let cancelled = false;
     (async () => {
       try {
-        const [{ runs }, { workers }, { repos }, { templates }, { secrets }, { settings }, { connections }, selfUsage, adminUsage] =
+        const [{ runs }, { workers }, { repos }, { templates }, { secrets }, settingsResult, { connections }, selfUsage, adminUsage] =
           await Promise.all([
             api.listRuns({ view: "summary" }),
             api.listWorkers(),
             api.listRepos(),
             api.listAgentTemplates(),
             api.listSecrets(),
-            api.getMySettings(),
+            api.getMySettings().catch(() => null),
             api.listConnections(),
             // Usage is best-effort (.catch → null) so it can never fail the core load,
             // and the admin view is fetched ONLY for an admin — a non-admin never hits
@@ -165,6 +165,7 @@ export function Dashboard() {
             user?.is_admin ? api.getAdminUsage().catch(() => null) : Promise.resolve(null),
           ]);
         if (cancelled) return;
+        const settings = settingsResult?.settings;
         setData({
           runs,
           workers,
@@ -172,7 +173,7 @@ export function Dashboard() {
           workersTotal: workers.length,
           reposEnabled: repos.filter((r) => r.enabled).length,
           templates: templates.length,
-          hasToken: hasUsableCredential(secrets, settings.codex_account_mode),
+          hasToken: hasUsableCredential(secrets, settings?.codex_account_mode),
           hasForge: connections.length > 0,
           selfUsage,
           adminUsage,
@@ -375,7 +376,7 @@ export function Dashboard() {
               done={data.hasToken}
               index={1}
               title="Add a model credential"
-              hint="Agents run on your own credentials; the token is encrypted at rest."
+              hint="Agents run on your own credentials; your credential is encrypted at rest."
               to="/settings"
               cta="Settings"
             />

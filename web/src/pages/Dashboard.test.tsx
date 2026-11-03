@@ -395,6 +395,38 @@ describe("Dashboard onboarding step 4 is durable (PRD #1331)", () => {
     expect(screen.getByText("Bring a worker online").className).not.toContain("line-through");
     expect(container.textContent).toContain("0/4 done");
   });
+});
+
+describe("step 1 credential usability (PRD #1429)", () => {
+  const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+  const secret: SecretMeta = {
+    id: "s1",
+    kind: "anthropic_token",
+    label: "tok",
+    is_default: true,
+    enabled: true,
+    disabled_at: null,
+    auto_eligible: false,
+    created_at: "2026-09-13T00:00:00Z",
+    updated_at: "2026-09-13T00:00:00Z",
+  };
+
+  it.each<{ name: string; row: Partial<SecretMeta> }>([
+    { name: "Claude token", row: {} },
+    { name: "linked default Codex login", row: { kind: "codex_auth", codex_status: "linked" } },
+  ])("renders tiles and completes step 1 with a $name when settings fail", async ({ row }) => {
+    mockApi.getMySettings.mockRejectedValueOnce(new Error("settings unavailable"));
+    mockApi.listSecrets.mockResolvedValue({ secrets: [{ ...secret, ...row }] });
+    renderDashboard();
+    await flush();
+
+    expect(mockApi.getMySettings).toHaveBeenCalledOnce();
+    expect(screen.getByText("Active runs")).toBeTruthy();
+    expect(screen.getByText("Live run row")).toBeTruthy();
+    expect(screen.getByText("Add a model credential").className).toContain("line-through");
+    expect(screen.getByText("2/4 done")).toBeTruthy();
+  });
 
   // PRD #1429: credential usability must reach the actual checklist, including
   // the viewer's account mode. Every other setup step is complete in this matrix.
@@ -425,17 +457,6 @@ describe("Dashboard onboarding step 4 is durable (PRD #1331)", () => {
     // A registered fleet, connected forge and enabled repo leave only credential
     // usability to decide whether the card hides or reads 3/4 done. The loaded
     // Workers tile remains visible and reads 0/2 for the two offline workers.
-    const secret: SecretMeta = {
-      id: "s1",
-      kind: "anthropic_token",
-      label: "tok",
-      is_default: true,
-      enabled: true,
-      disabled_at: null,
-      auto_eligible: false,
-      created_at: "2026-09-13T00:00:00Z",
-      updated_at: "2026-09-13T00:00:00Z",
-    };
     const connection: ForgeConnection = {
       id: "c1",
       forge_type: "github",
