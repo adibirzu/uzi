@@ -1,0 +1,5 @@
+# Fork-only. no-mistakes reads this from fork main; never send it upstream.
+rebase: {strategy: merge}
+# Codex authors require a reviewer from another model family.
+agent: claude
+# No commands or ignore_patterns overrides: retain normal per-PR checks.
