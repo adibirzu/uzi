@@ -212,6 +212,9 @@ func (s *Service) SubmitPlanCrossCheck(ctx context.Context, worker store.Worker,
 	if worker.IsolatedLane {
 		return store.CrossCheck{}, ErrCrossCheckUnavailable
 	}
+	if err := rejectHostDerivedRun(lead); err != nil {
+		return store.CrossCheck{}, fmt.Errorf("submit plan cross-check: %w", err)
+	}
 	var existing store.CrossCheck
 	errRetry := errors.New("existing plan cross-check")
 	_, err = s.createRunResolved(ctx, lead.UserID, &childHarness, func(q Store, resolved resolvedHarness) (store.Run, error) {

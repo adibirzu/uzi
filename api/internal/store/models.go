@@ -1265,11 +1265,12 @@ type Run struct {
 	HarnessOtherMeasured          pgtype.Float8      `json:"harness_other_measured"`
 	HarnessPreferredHeld          pgtype.Bool        `json:"harness_preferred_held"`
 	HarnessOtherHeld              pgtype.Bool        `json:"harness_other_held"`
+	HarnessPreferredWeeklyResetAt pgtype.Timestamptz `json:"harness_preferred_weekly_reset_at"`
+	HarnessOtherWeeklyResetAt     pgtype.Timestamptz `json:"harness_other_weekly_reset_at"`
 	CodexCredentialSourceKind     pgtype.Text        `json:"codex_credential_source_kind"`
 	CodexCredentialSourceID       pgtype.Text        `json:"codex_credential_source_id"`
 	CodexCredentialSourceRevision pgtype.Int8        `json:"codex_credential_source_revision"`
-	HarnessPreferredWeeklyResetAt pgtype.Timestamptz `json:"harness_preferred_weekly_reset_at"`
-	HarnessOtherWeeklyResetAt     pgtype.Timestamptz `json:"harness_other_weekly_reset_at"`
+	CodexCredentialSourceWorkerID pgtype.UUID        `json:"codex_credential_source_worker_id"`
 }
 
 type RunCompletionAttempt struct {

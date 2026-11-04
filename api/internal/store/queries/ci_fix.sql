@@ -101,6 +101,16 @@ SELECT EXISTS (
       AND status NOT IN ('completed', 'failed', 'cancelled')
 ) AS active;
 
+-- name: HasWorkerHostCodexRunForBranch :one
+-- CI fixes are derived work on a failed MR branch. A worker-host Codex binding is
+-- non-transferable, so that branch cannot resolve a server-held credential.
+SELECT EXISTS (
+    SELECT 1 FROM runs
+    WHERE repo_id = @repo_id::uuid
+      AND branch = @branch
+      AND codex_credential_source_kind = 'worker_host'
+) AS host_bound;
+
 -- name: FindCIFixStampTarget :one
 -- Verification stamp-target selection (PRD #6). The ci_fix run whose fix branch is
 -- @branch, not yet stamped, whose snapshotted (failing) pipeline id is BELOW the

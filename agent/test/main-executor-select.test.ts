@@ -14,7 +14,7 @@ import type { SummaryRunner } from "../src/summary-runner.js";
 import { buildChatExecutor, buildRunExecutor, type BuildRunExecutorDeps } from "../src/main.js";
 import { ChatExecutor } from "../src/chat-executor.js";
 import type { ClaimCodexSecrets } from "../src/protocol.js";
-import type { HostCodexCredentialSource } from "../src/codex/host-credential-source.js";
+import { HostCredentialSourceError, type HostCodexCredentialSource } from "../src/codex/host-credential-source.js";
 
 // PRD #1429 M6 — the harness-neutral e2e stub seam (`agent/src/main.ts`).
 //
@@ -123,6 +123,59 @@ it("worker-host binding owns proactive release and never calls WorkerClient cred
   assert.equal(localReleaseCalls, 1, "initial executor release delegates to local proactive refresh owner");
   assert.equal(localRefreshCalls, 1);
   assert.equal(workerClientCalls, 0, "worker-host source never calls /codex/release or /codex/refresh");
+});
+
+it("worker-host source revision drift refuses initial and bridge token use", async () => {
+  let revision = 1;
+  let phase: "initial" | "release" | "refresh" = "initial";
+  const source: HostCodexCredentialSource = {
+    kind: "worker_host",
+    sourceId: "11111111-1111-4111-8111-111111111111",
+    get sourceRevision() { return revision; },
+    read: () => {
+      if (phase === "initial") revision++;
+      return { accessToken: "SENTINEL-ACCESS", refreshToken: "SENTINEL-REFRESH", accountId: "sentinel-account" };
+    },
+    ready: () => true,
+    release: async () => {
+      if (phase === "release") revision++;
+      return { accessToken: "SENTINEL-ACCESS", refreshToken: "SENTINEL-REFRESH", accountId: "sentinel-account" };
+    },
+    refresh: async () => {
+      if (phase === "refresh") revision++;
+      return { accessToken: "SENTINEL-ACCESS", refreshToken: "SENTINEL-REFRESH", accountId: "sentinel-account" };
+    },
+  };
+  let result = buildRunExecutor("run-host-revision-initial", HOST_CLAIM, baseDeps({ hostCodexSource: source }));
+  assert.ok(result.executor instanceof FailClosedExecutor);
+
+  revision = 1;
+  phase = "release";
+  result = buildRunExecutor("run-host-revision-release", HOST_CLAIM, baseDeps({ hostCodexSource: source }));
+  assert.ok(result.executor instanceof CodexExecutor);
+  const bridge = (result.executor as unknown as {
+    opts: { credentialBridge: Pick<WorkerClient, "releaseCodex" | "refreshCodex"> };
+  }).opts.credentialBridge;
+  await assert.rejects(
+    bridge.releaseCodex("run-host-revision-release", { capability: "ignored" }, {
+      authMode: "subscription", chatgptAccountId: "sentinel-account", minimumGeneration: 0,
+    }),
+    (error: unknown) => error instanceof HostCredentialSourceError && error.reason === "unavailable",
+  );
+
+  revision = 1;
+  phase = "refresh";
+  result = buildRunExecutor("run-host-revision-refresh", HOST_CLAIM, baseDeps({ hostCodexSource: source }));
+  assert.ok(result.executor instanceof CodexExecutor);
+  const refreshBridge = (result.executor as unknown as {
+    opts: { credentialBridge: Pick<WorkerClient, "releaseCodex" | "refreshCodex"> };
+  }).opts.credentialBridge;
+  await assert.rejects(
+    refreshBridge.refreshCodex("run-host-revision-refresh", { capability: "ignored", operation_id: "fixture-operation", observed_generation: 0 }, {
+      authMode: "subscription", chatgptAccountId: "sentinel-account",
+    }),
+    (error: unknown) => error instanceof HostCredentialSourceError && error.reason === "unavailable",
+  );
 });
 
 it("2833 forwards shared advice factory to Codex summary runner while stub stays inert", async () => {

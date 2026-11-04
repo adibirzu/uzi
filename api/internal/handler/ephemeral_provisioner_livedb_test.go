@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/vtmocanu/uzi/api/internal/capability"
 	"github.com/vtmocanu/uzi/api/internal/hostedsvc"
 	"github.com/vtmocanu/uzi/api/internal/secretbox"
 	"github.com/vtmocanu/uzi/api/internal/settings"
@@ -94,6 +95,9 @@ func (fx *ephemeralFixture) onlineWorker(name string, docker bool) uuid.UUID {
 // queuedRun inserts a fresh queued, unowned run carrying required_capabilities.
 func (fx *ephemeralFixture) queuedRun(caps []string) uuid.UUID {
 	fx.t.Helper()
+	if caps == nil {
+		caps = []string{}
+	}
 	id := uuid.New()
 	if _, err := fx.pool.Exec(fx.ctx,
 		`INSERT INTO runs (id, user_id, repo_id, issue_iid, issue_title, issue_description, status, worker_id, required_capabilities)
@@ -250,6 +254,33 @@ func TestEphemeralProvisionPassSuccessLiveDB(t *testing.T) {
 	}
 	if n := len(fx.ephemeralRows()); n != 1 {
 		t.Errorf("ephemeral rows for fixture user after second pass = %d, want 1 (no duplicate)", n)
+	}
+}
+
+func TestEphemeralProvisionPassSkipsWorkerHostCodexRunLiveDB(t *testing.T) {
+	fx := newEphemeralFixture(t, true)
+	owner := fx.onlineWorker("host-owner", false)
+	sourceID := uuid.NewString()
+	if _, err := fx.pool.Exec(fx.ctx, `UPDATE workers
+		SET status = 'offline', codex_host_source_id = $2, codex_host_source_revision = 7,
+		    codex_host_source_ready = true, protocol_capabilities = $3
+		WHERE id = $1`, owner, sourceID, []string{capability.CodexHarnessV1, capability.CodexRuntimeV2, capability.CodexHostLoginV1}); err != nil {
+		t.Fatalf("seed offline host source: %v", err)
+	}
+	runID := fx.queuedRun(nil)
+	if _, err := fx.pool.Exec(fx.ctx, `UPDATE runs
+		SET harness = 'codex', codex_credential_source_kind = 'worker_host',
+		    codex_credential_source_id = $2, codex_credential_source_revision = 7,
+		    codex_credential_source_worker_id = $3
+		WHERE id = $1`, runID, sourceID, owner); err != nil {
+		t.Fatalf("bind worker-host Codex run: %v", err)
+	}
+
+	if _, err := fx.provisioner(true, 2).ProvisionPass(fx.ctx); err != nil {
+		t.Fatalf("ProvisionPass: %v", err)
+	}
+	if rows := fx.ephemeralRows(); len(rows) != 0 {
+		t.Fatalf("ephemeral workers = %+v, want none for worker-host-bound run", rows)
 	}
 }
 

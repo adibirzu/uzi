@@ -120,6 +120,10 @@ func (req *crossCheckVerdictRequest) UnmarshalJSON(raw []byte) error {
 }
 
 func crossCheckError(w http.ResponseWriter, err error) {
+	if errors.Is(err, workersvc.ErrHostCodexDerivedRunUnsupported) {
+		httpx.ErrorReason(w, http.StatusConflict, err.Error(), "host_codex_derived_run_unsupported")
+		return
+	}
 	if errors.Is(err, workersvc.ErrCrossCheckRefused) {
 		reason := "cross_check_refused"
 		switch {

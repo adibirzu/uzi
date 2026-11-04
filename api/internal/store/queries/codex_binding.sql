@@ -12,6 +12,7 @@ SET harness = 'codex',
     codex_credential_source_kind = 'worker_host',
     codex_credential_source_id = @source_id::text,
     codex_credential_source_revision = @source_revision::bigint,
+    codex_credential_source_worker_id = @worker_id::uuid,
     updated_at = now()
 WHERE id = @id AND user_id = @user_id
   AND codex_secret_id IS NULL

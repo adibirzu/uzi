@@ -2,6 +2,7 @@
 // probes HOME/CODEX_HOME/keyrings; do not share this directory with a CLI.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const AUTH_FILE = "auth.json";
@@ -10,8 +11,8 @@ const REFRESH_LOCK_FILE = "uzi-refresh.lock";
 const MAX_AUTH_BYTES = 64 * 1024;
 // Mirrors the Go client's provider-response bound: refresh responses are untrusted.
 const MAX_PROVIDER_RESPONSE_BYTES = 1 << 20;
-const LOCK_STALE_MS = 60_000;
 const REFRESH_TIMEOUT_MS = 15_000;
+const REFRESH_LOCK_TIMEOUT_MS = 30_000;
 const REFRESH_EARLY_MS = 120_000;
 // Mirrors api/internal/codexauth/codexauth.go DefaultOAuthBaseURL/DefaultClientID.
 const OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token";
@@ -40,11 +41,15 @@ export interface HostSourceOptions {
   now?: () => number;
   /** Test seam; production always uses the fixed 15-second provider deadline. */
   refreshTimeoutMs?: number;
+  lockTimeoutMs?: number;
 }
 
 export class HostCredentialSourceError extends Error {
-  constructor(readonly reason: "unavailable" | "needs_relogin" = "unavailable") {
-    super(reason === "needs_relogin" ? "host Codex credential needs re-login" : "host Codex credential is unavailable");
+  constructor(
+    readonly reason: "unavailable" | "needs_relogin" = "unavailable",
+    message = reason === "needs_relogin" ? "host Codex credential needs re-login" : "host Codex credential is unavailable",
+  ) {
+    super(message);
     this.name = "HostCredentialSourceError";
   }
 }
@@ -55,6 +60,13 @@ function unavailable(): never {
 
 function relogin(): never {
   throw new HostCredentialSourceError("needs_relogin");
+}
+
+function removeLockManually(): never {
+  throw new HostCredentialSourceError(
+    "unavailable",
+    "host Codex refresh lock requires manual removal: remove uzi-refresh.lock manually after confirming no other worker uses this home",
+  );
 }
 
 function lstatOwned(file: string, mode: number, dir = false): fs.Stats {
@@ -121,8 +133,12 @@ function parse(raw: Buffer): Parsed {
     unavailable();
   }
   const root = value as Record<string, unknown>;
+  const legacyChatGPT = root.auth_mode === undefined
+    && (root.OPENAI_API_KEY === undefined || root.OPENAI_API_KEY === null)
+    && !["agent_identity", "personal_access_token", "bedrock_api_key", "bedrock_access_keys"]
+      .some(key => Object.hasOwn(root, key));
   if (
-    (root.auth_mode !== undefined && root.auth_mode !== "chatgpt")
+    (root.auth_mode !== "chatgpt" && !legacyChatGPT)
     || typeof root.tokens !== "object"
     || root.tokens === null
     || Array.isArray(root.tokens)
@@ -205,59 +221,142 @@ function sleep(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
-function sourceID(state: string): string {
+interface SourceState {
+  readonly id: string;
+  readonly revision: number;
+  readonly accountId: string;
+}
+
+function writeSourceState(state: string, value: SourceState): void {
+  const file = path.join(state, SOURCE_ID_FILE);
+  const temp = path.join(state, `.${SOURCE_ID_FILE}.${randomUUID()}.tmp`);
+  try {
+    const fd = fs.openSync(temp, "wx", 0o600);
+    try {
+      fs.writeFileSync(fd, JSON.stringify({ id: value.id, revision: value.revision, account_id: value.accountId }));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(temp, file);
+    fsyncDirectory(state);
+    lstatOwned(file, 0o600);
+  } catch {
+    try { fs.unlinkSync(temp); } catch {}
+    unavailable();
+  }
+}
+
+function sourceState(state: string, accountId: string): SourceState {
   lstatOwned(state, 0o700, true);
   const file = path.join(state, SOURCE_ID_FILE);
   if (fs.existsSync(file)) {
     lstatOwned(file, 0o600);
-    const id = fs.readFileSync(file, "utf8").trim();
+    const text = fs.readFileSync(file, "utf8").trim();
+    const id = text;
     if (/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id)) {
-      return id;
+      const value = { id, revision: 1, accountId };
+      writeSourceState(state, value);
+      return value;
+    }
+    try {
+      const value: unknown = JSON.parse(text);
+      if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+        const record = value as { id?: unknown; revision?: unknown; account_id?: unknown };
+        if (typeof record.id === "string" && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(record.id) &&
+          Number.isSafeInteger(record.revision) && (record.revision as number) > 0 && typeof record.account_id === "string" && record.account_id !== "") {
+          if (record.account_id === accountId) return { id: record.id, revision: record.revision as number, accountId };
+          const next = { id: record.id, revision: (record.revision as number) + 1, accountId };
+          writeSourceState(state, next);
+          return next;
+        }
+      }
+    } catch {
     }
     return unavailable();
   }
-  const temp = path.join(state, `.${SOURCE_ID_FILE}.${randomUUID()}.tmp`);
-  const id = randomUUID();
+  const value = { id: randomUUID(), revision: 1, accountId };
+  writeSourceState(state, value);
+  return value;
+}
+
+interface LockOwner {
+  readonly pid: number;
+  readonly owner: string;
+  readonly pidNamespace: string | undefined;
+}
+
+const heldRefreshLocks = new Set<string>();
+
+function currentLockOwner(): LockOwner {
+  let bootID: string | undefined;
+  let pidNamespace: string | undefined;
   try {
-    fs.writeFileSync(temp, `${id}\n`, { mode: 0o600, flag: "wx" });
-    fs.renameSync(temp, file);
-    fsyncDirectory(state);
-    lstatOwned(file, 0o600);
-    return id;
-  } catch {
-    try {
-      fs.unlinkSync(temp);
-    } catch {
-      // Best-effort cleanup of a failed source-id publish.
+    const value = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    if (value !== "") bootID = value;
+  } catch {}
+  try {
+    const value = fs.readlinkSync("/proc/self/ns/pid");
+    if (value !== "") pidNamespace = value;
+  } catch {}
+  return { pid: process.pid, owner: bootID === undefined ? `hostname:${os.hostname()}` : `boot:${bootID}`, pidNamespace };
+}
+
+function parseLockOwner(content: Buffer): LockOwner | undefined {
+  try {
+    const value: unknown = JSON.parse(content.toString("utf8"));
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return undefined;
     }
-    return unavailable();
+    const owner = value as { pid?: unknown; owner?: unknown; pid_namespace?: unknown };
+    return Number.isSafeInteger(owner.pid) && (owner.pid as number) > 0 && typeof owner.owner === "string" && owner.owner !== ""
+      && typeof owner.pid_namespace === "string" && owner.pid_namespace !== ""
+      ? { pid: owner.pid as number, owner: owner.owner, pidNamespace: owner.pid_namespace }
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 
-function lockOwnerIsDead(lock: string): boolean {
-  try {
-    const value: unknown = JSON.parse(fs.readFileSync(lock, "utf8"));
-    if (typeof value !== "object" || value === null || !Number.isSafeInteger((value as { pid?: unknown }).pid)) {
-      return false;
-    }
-    const pid = (value as { pid: number }).pid;
-    if (pid <= 0) {
-      return false;
-    }
-    try {
-      process.kill(pid, 0);
-      return false;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code === "ESRCH";
-    }
-  } catch {
+function lockOwnerIsDead(owner: LockOwner, current: LockOwner): boolean {
+  if (current.pidNamespace === undefined || owner.owner !== current.owner || owner.pidNamespace !== current.pidNamespace) {
     return false;
   }
+  try {
+    process.kill(owner.pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
 }
 
-// The stale observation is only permission to try reclaiming. Recheck the exact
-// directory entry before unlinking so a holder that replaced its lock in-between
-// cannot have its fresh lock removed.
+function sameLockOwner(left: LockOwner, right: LockOwner): boolean {
+  return left.pid === right.pid && left.owner === right.owner && left.pidNamespace === right.pidNamespace;
+}
+
+function createLock(file: string, owner: LockOwner, now: number): boolean {
+  const directory = path.dirname(file);
+  const temporary = path.join(directory, `.${REFRESH_LOCK_FILE}.${randomUUID()}.tmp`);
+  try {
+    const fd = fs.openSync(temporary, "wx", 0o600);
+    try {
+      fs.writeFileSync(fd, JSON.stringify({ pid: owner.pid, owner: owner.owner, pid_namespace: owner.pidNamespace, at: now }));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.linkSync(temporary, file);
+    fs.unlinkSync(temporary);
+    return true;
+  } catch (error) {
+    try {
+      fs.unlinkSync(temporary);
+    } catch {}
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    unavailable();
+  }
+}
+
 function unchangedLock(file: string, observed: fs.Stats, content: Buffer | undefined): boolean {
   try {
     const current = fs.lstatSync(file);
@@ -313,21 +412,23 @@ async function readResponse(response: Response): Promise<unknown> {
 
 class Source implements HostCodexCredentialSource {
   readonly kind = "worker_host" as const;
-  readonly sourceRevision = 1;
   // One source owns one refresh flight: concurrent runs get the same committed login.
   private flight: Promise<HostCodexLogin> | undefined;
   private reLoginNeeded = false;
   private rejected: HostCodexLogin | undefined;
 
   constructor(
-    readonly sourceId: string,
+    private source: SourceState,
     private readonly home: string,
     private readonly state: string,
-    private readonly initialAccount: string,
     private readonly fetchFn: HostFetch,
     private readonly now: () => number,
     private readonly refreshTimeoutMs: number,
+    private readonly lockTimeoutMs: number,
   ) {}
+
+  get sourceId(): string { return this.source.id; }
+  get sourceRevision(): number { return this.source.revision; }
 
   private get auth(): string {
     return path.join(this.home, AUTH_FILE);
@@ -342,18 +443,25 @@ class Source implements HostCodexCredentialSource {
 
   read(): HostCodexLogin {
     const login = this.current().login;
+    let reLoggedIn = false;
     if (this.reLoginNeeded) {
       if (this.rejected && !same(login, this.rejected)) {
         this.reLoginNeeded = false;
         this.rejected = undefined;
+        reLoggedIn = true;
       } else {
         relogin();
       }
     }
-    if (login.accountId !== this.initialAccount) {
-      unavailable();
-    }
+    this.accept(login, reLoggedIn);
     return login;
+  }
+
+  private accept(login: HostCodexLogin, forceRevision = false): void {
+    if (!forceRevision && login.accountId === this.source.accountId) return;
+    const next = { id: this.source.id, revision: this.source.revision + 1, accountId: login.accountId };
+    writeSourceState(this.state, next);
+    this.source = next;
   }
 
   ready(): boolean {
@@ -396,53 +504,49 @@ class Source implements HostCodexCredentialSource {
   }
 
   // The sidecar lock is the cross-process custody boundary. It serializes this
-  // dedicated directory while safely reclaiming old or dead-owner locks.
+  // dedicated directory while safely reclaiming locks whose recorded owner is dead.
   private async lock(): Promise<() => void> {
     const file = path.join(this.home, REFRESH_LOCK_FILE);
+    const owner = currentLockOwner();
+    const deadline = Date.now() + this.lockTimeoutMs;
     for (;;) {
-      try {
-        const fd = fs.openSync(file, "wx", 0o600);
-        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, at: this.now() }));
-        fs.fsyncSync(fd);
+      if (createLock(file, owner, this.now())) {
+        heldRefreshLocks.add(file);
         return () => {
-          try {
-            fs.closeSync(fd);
-          } catch {
-            // The unlink below remains the release attempt.
-          }
           try {
             fs.unlinkSync(file);
           } catch {
             // A stale-lock reclaim may have won this race.
+          } finally {
+            heldRefreshLocks.delete(file);
           }
         };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-          unavailable();
-        }
-        let stale = false;
-        let observed: fs.Stats;
-        let content: Buffer | undefined;
-        try {
-          observed = fs.lstatSync(file);
-          if (observed.isFile()) content = fs.readFileSync(file);
-          stale = !observed.isFile()
-            || observed.isSymbolicLink()
-            || this.now() - observed.mtimeMs > LOCK_STALE_MS
-            || lockOwnerIsDead(file);
-        } catch {
-          continue;
-        }
-        if (stale && unchangedLock(file, observed!, content)) {
-          try {
-            fs.unlinkSync(file);
-          } catch {
-            // Holder changed; retry exclusive create.
-          }
-          continue;
-        }
-        await sleep(25);
       }
+      let observed: fs.Stats;
+      let content: Buffer;
+      try {
+        observed = fs.lstatSync(file);
+        if (!observed.isFile() || observed.isSymbolicLink()) unavailable();
+        content = fs.readFileSync(file);
+      } catch (error) {
+        if (error instanceof HostCredentialSourceError) throw error;
+        continue;
+      }
+      const holder = parseLockOwner(content);
+      if (holder === undefined || holder.owner !== owner.owner || holder.pidNamespace !== owner.pidNamespace) {
+        removeLockManually();
+      }
+      const staleSelf = sameLockOwner(holder, owner) && !heldRefreshLocks.has(file);
+      if ((staleSelf || lockOwnerIsDead(holder, owner)) && unchangedLock(file, observed, content)) {
+        try {
+          fs.unlinkSync(file);
+        } catch {}
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        removeLockManually();
+      }
+      await sleep(Math.min(25, Math.max(1, deadline - Date.now())));
     }
   }
 
@@ -451,7 +555,8 @@ class Source implements HostCodexCredentialSource {
     try {
       const current = this.current();
       if (current.login.accountId !== observed.accountId) {
-        unavailable();
+        this.accept(current.login);
+        return current.login;
       }
       // Compare after the lock: an external atomic writer wins and is adopted.
       if (!same(current.login, observed)) {
@@ -531,9 +636,6 @@ class Source implements HostCodexCredentialSource {
         unavailable();
       }
       const saved = this.read();
-      if (saved.accountId !== observed.accountId) {
-        unavailable();
-      }
       return saved;
     } finally {
       unlock();
@@ -552,17 +654,24 @@ export function openHostCodexCredentialSource(
   }
   lstatOwned(home, 0o700, true);
   lstatOwned(stateDir, 0o700, true);
-  const auth = path.join(home, AUTH_FILE);
+  let canonicalHome: string;
+  try {
+    // Canonicalize aliases so all spellings share the same sidecar lock ownership.
+    canonicalHome = fs.realpathSync(home);
+  } catch {
+    return unavailable();
+  }
+  const auth = path.join(canonicalHome, AUTH_FILE);
   lstatOwned(auth, 0o600);
   const initial = parse(read(auth)).login;
   const source = new Source(
-    sourceID(stateDir),
-    home,
+    sourceState(stateDir, initial.accountId),
+    canonicalHome,
     stateDir,
-    initial.accountId,
     opts.fetch ?? fetch,
     opts.now ?? Date.now,
     opts.refreshTimeoutMs ?? REFRESH_TIMEOUT_MS,
+    opts.lockTimeoutMs ?? REFRESH_LOCK_TIMEOUT_MS,
   );
   source.read();
   return source;

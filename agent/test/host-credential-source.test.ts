@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -37,6 +38,28 @@ function auth(access = ACCESS, refresh = REFRESH, extra: Record<string, unknown>
   });
 }
 
+function legacyAuth(extra: Record<string, unknown> = {}): string {
+  const value = JSON.parse(auth()) as Record<string, unknown>;
+  delete value.auth_mode;
+  return JSON.stringify({ ...value, ...extra });
+}
+
+function lockRecord(pid: number, pidNamespace?: string): string {
+  let bootID: string | undefined;
+  let namespace = pidNamespace;
+  try {
+    const value = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    if (value !== "") bootID = value;
+  } catch {}
+  try {
+    if (namespace === undefined) {
+      const value = fs.readlinkSync("/proc/self/ns/pid");
+      if (value !== "") namespace = value;
+    }
+  } catch {}
+  return JSON.stringify({ pid, owner: bootID === undefined ? `hostname:${os.hostname()}` : `boot:${bootID}`, pid_namespace: namespace });
+}
+
 function fixture(t: test.TestContext): { home: string; state: string; auth: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "uzi-host-codex-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -67,6 +90,24 @@ test("host credential source accepts only a protected nested file-store login", 
   assert.equal(source.read().accessToken, ACCESS);
   assert.match(source.sourceId, /^[0-9a-f-]{36}$/i);
   assert.equal(openHostCodexCredentialSource(f.home, f.state).sourceId, source.sourceId);
+});
+
+test("host credential source accepts only unambiguous legacy ChatGPT logins", t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.auth, legacyAuth({ OPENAI_API_KEY: null }), { mode: 0o600 });
+  assert.equal(openHostCodexCredentialSource(f.home, f.state).read().accountId, ACCOUNT);
+
+  for (const extra of [
+    { auth_mode: "api_key" },
+    { OPENAI_API_KEY: "key" },
+    { agent_identity: null },
+    { personal_access_token: null },
+    { bedrock_api_key: null },
+    { bedrock_access_keys: null },
+  ]) {
+    fs.writeFileSync(f.auth, legacyAuth(extra), { mode: 0o600 });
+    assert.throws(() => openHostCodexCredentialSource(f.home, f.state), closed);
+  }
 });
 
 test("host credential source fails closed for permissive, absent, symlinked, or changed input", t => {
@@ -132,33 +173,111 @@ test("refresh is single-flight for concurrent releases and atomically rotates to
   assert.deepEqual(tempFiles(f.home), []);
 });
 
-test("fresh lock backs off and stale dead or old locks are recovered", async t => {
+test("refresh locks reclaim a stale same-process owner and a dead owner in the same PID namespace", async t => {
   const f = fixture(t);
   fs.writeFileSync(f.auth, auth(expiredToken()), { mode: 0o600 });
   const lock = path.join(f.home, "uzi-refresh.lock");
-  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, at: Date.now() }), { mode: 0o600 });
+  fs.writeFileSync(lock, lockRecord(process.pid), { mode: 0o600 });
   let calls = 0;
   const fetch: HostFetch = async () => {
     calls++;
     return new Response(JSON.stringify({ access_token: "SENTINEL-ACCESS-LOCKED" }));
   };
   const source = openHostCodexCredentialSource(f.home, f.state, { fetch });
-  const blocked = source.release();
-  await new Promise(resolve => setTimeout(resolve, 35));
-  assert.equal(calls, 0, "fresh sidecar lock backs off before issuing refresh");
+  assert.equal((await source.release()).accessToken, "SENTINEL-ACCESS-LOCKED");
+  assert.equal(calls, 1, "a prior process life with the same owner record is reclaimed");
+  assert.equal(fs.existsSync(lock), false, "stale same-process lock is removed before refresh");
+
+  fs.writeFileSync(f.auth, auth(expiredToken()), { mode: 0o600 });
+  let namespace: string | undefined;
+  try {
+    namespace = fs.readlinkSync("/proc/self/ns/pid");
+  } catch {}
+  if (namespace !== undefined) {
+    fs.writeFileSync(lock, lockRecord(999_999_999, namespace), { mode: 0o600 });
+    assert.equal((await source.release()).accessToken, "SENTINEL-ACCESS-LOCKED");
+    assert.equal(calls, 2, "dead lock holder is recovered");
+  }
+
+  fs.writeFileSync(f.auth, auth(expiredToken()), { mode: 0o600 });
+  fs.writeFileSync(lock, lockRecord(process.pid, "pid:[foreign]"), { mode: 0o600 });
+  await assert.rejects(source.release(), error => {
+    assert.ok(error instanceof HostCredentialSourceError);
+    assert.match(error.message, /remove uzi-refresh\.lock manually/);
+    return true;
+  });
+  assert.equal(calls, namespace === undefined ? 1 : 2, "a foreign namespace lock is never reclaimed");
   fs.unlinkSync(lock);
-  assert.equal((await blocked).accessToken, "SENTINEL-ACCESS-LOCKED");
 
-  fs.writeFileSync(f.auth, auth(expiredToken()), { mode: 0o600 });
-  fs.writeFileSync(lock, JSON.stringify({ pid: 999_999_999, at: Date.now() }), { mode: 0o600 });
-  assert.equal((await source.release()).accessToken, "SENTINEL-ACCESS-LOCKED");
-  assert.equal(calls, 2, "dead lock holder is recovered");
+  fs.writeFileSync(lock, "", { mode: 0o600 });
+  await assert.rejects(source.release(), error => {
+    assert.ok(error instanceof HostCredentialSourceError);
+    assert.match(error.message, /remove uzi-refresh\.lock manually/);
+    return true;
+  });
+  fs.unlinkSync(lock);
+});
 
+test("refresh lock bounds a live foreign-owner wait", async t => {
+  const f = fixture(t);
   fs.writeFileSync(f.auth, auth(expiredToken()), { mode: 0o600 });
-  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, at: 0 }), { mode: 0o600 });
-  fs.utimesSync(lock, new Date(0), new Date(0));
-  assert.equal((await source.release()).accessToken, "SENTINEL-ACCESS-LOCKED");
-  assert.equal(calls, 3, "old lock is recovered even when its pid is live");
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 1000)"], { stdio: "ignore" });
+  t.after(() => child.kill());
+  const childPID = child.pid;
+  assert.ok(childPID !== undefined);
+  fs.writeFileSync(path.join(f.home, "uzi-refresh.lock"), lockRecord(childPID), { mode: 0o600 });
+  let calls = 0;
+  const source = openHostCodexCredentialSource(f.home, f.state, {
+    lockTimeoutMs: 10,
+    fetch: async () => {
+      calls++;
+      return new Response(JSON.stringify({ access_token: "must-not-be-used" }));
+    },
+  });
+  await assert.rejects(source.release(), error => {
+    assert.ok(error instanceof HostCredentialSourceError);
+    assert.match(error.message, /remove uzi-refresh\.lock manually/);
+    return true;
+  });
+  assert.equal(calls, 0, "a live foreign owner is never refreshed around");
+});
+
+test("a waiter shares an in-process lock through an aliased home", async t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.auth, auth(expiredToken()), { mode: 0o600 });
+  const aliasParent = path.join(path.dirname(f.home), "home-alias");
+  fs.symlinkSync(path.dirname(f.home), aliasParent);
+  const aliasHome = path.join(aliasParent, path.basename(f.home));
+  let resolveFirst!: (response: Response) => void;
+  const firstResponse = new Promise<Response>(resolve => {
+    resolveFirst = resolve;
+  });
+  let started!: () => void;
+  const firstStarted = new Promise<void>(resolve => {
+    started = resolve;
+  });
+  let calls = 0;
+  const fetch: HostFetch = async () => {
+    calls++;
+    if (calls === 1) {
+      started();
+      return firstResponse;
+    }
+    return new Response(JSON.stringify({ access_token: "must-not-be-used" }));
+  };
+  const holder = openHostCodexCredentialSource(f.home, f.state, { fetch, lockTimeoutMs: 250 });
+  const waiter = openHostCodexCredentialSource(aliasHome, f.state, { fetch, lockTimeoutMs: 250 });
+
+  const holding = holder.refresh();
+  await firstStarted;
+  const waiting = waiter.refresh();
+  await new Promise(resolve => setTimeout(resolve, 35));
+  assert.equal(calls, 1, "the waiter must not reclaim an in-process holder through an alias");
+  resolveFirst(new Response(JSON.stringify({ access_token: "SENTINEL-ACCESS-SHARED" })));
+
+  const [, refreshed] = await Promise.all([holding, waiting]);
+  assert.equal(refreshed.accessToken, "SENTINEL-ACCESS-SHARED");
+  assert.equal(calls, 1, "the waiter adopts the released refresh without another provider call");
 });
 
 test("compare-before-save adopts external atomic writer without fetch", async t => {
@@ -172,7 +291,7 @@ test("compare-before-save adopts external atomic writer without fetch", async t 
     },
   });
   const lock = path.join(f.home, "uzi-refresh.lock");
-  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, at: Date.now() }), { mode: 0o600 });
+  fs.writeFileSync(lock, lockRecord(process.pid), { mode: 0o600 });
   const adopted = source.release();
   fs.writeFileSync(
     f.auth,

@@ -26,6 +26,7 @@ interface Seen {
   prompt?: string;
   systemPrompt?: string;
   model?: string;
+  runId?: string;
   calls: number;
 }
 
@@ -83,6 +84,16 @@ const claudeClaim: DeliverySummaryClaimView = {
 const codexClaim: DeliverySummaryClaimView = {
   run_id: "run-1",
   secrets: { codex: { auth_mode: "api_key", access_token: "codex-tok", capability: "cap-1" } },
+};
+const workerHostClaim: DeliverySummaryClaimView = {
+  run_id: "run-1",
+  summary_model: "haiku",
+  secrets: {
+    anthropic_oauth_token: "server-anthropic",
+    codex: { auth_mode: "subscription", codex_credential_source: {
+      kind: "worker_host", source_id: "11111111-1111-4111-8111-111111111111", source_revision: 1,
+    } },
+  },
 };
 
 const emptyGit: DeliveryContextGit = {
@@ -243,6 +254,19 @@ describe("diagram diagnostics", () => {
     assert.equal(records[0]!.stage, "editor");
     assert.equal(records[0]!.outcome, "omitted");
     assert.equal(records[0]!.reason, "deadline");
+  });
+});
+
+describe("worker-host delivery summary", () => {
+  it("records closure without invoking Claude or Codex", async () => {
+    const warnings: Record<string, unknown>[] = [];
+    const log = { ...nullLogger(), warn: (_message: string, fields?: Record<string, unknown>) => void warnings.push(fields ?? {}) };
+    const seen: Seen = { calls: 0 };
+    const r = await runner(claudeQueryFn(JSON.stringify(good), seen), { log, codex: fakeCodexFactory(JSON.stringify(good), seen) });
+    assert.equal(await r.generateDeliverySummary(await deliveryInput({ claim: workerHostClaim })), null);
+    assert.equal(seen.calls, 0);
+    assert.equal(seen.runId, undefined);
+    assert.deepEqual(warnings.map(w => w.reason), ["the claim's worker-host Codex source cannot generate summaries"]);
   });
 });
 

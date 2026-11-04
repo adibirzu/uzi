@@ -8290,6 +8290,69 @@ describe("CodexExecutor: F1 registry teardown relocation", () => {
     assert.deepEqual([...rlog.added].sort(), [...rlog.removed].sort(), "every registered token was evicted (no redactor leak)");
   });
 
+  it("host executor never calls /codex/release or /codex/refresh", async () => {
+    // Drive the real executor, not its option bridge: all three production credential
+    // sites (initial release, app-server refresh, durability reconcile) must retain host custody.
+    const rig = makeRig();
+    rig.deps = { ...rig.deps, deferRegistryTeardown: true };
+    let sourceReleases = 0;
+    let sourceRefreshes = 0;
+    let apiCalls = 0;
+    const source = {
+      async release() {
+        sourceReleases++;
+        return { accessToken: "host-source-release-token", accountId: "verified-account" };
+      },
+      async refresh() {
+        sourceRefreshes++;
+        return { accessToken: "host-source-refresh-token", accountId: "verified-account" };
+      },
+    };
+    const bridge: Pick<WorkerClient, "releaseCodex" | "refreshCodex"> = {
+      async releaseCodex() {
+        const login = await source.release();
+        return { auth_mode: "subscription", access_token: login.accessToken, generation: 0,
+          chatgpt_account_id: login.accountId, chatgpt_plan_type: null };
+      },
+      async refreshCodex() {
+        const login = await source.refresh();
+        return { auth_mode: "subscription", access_token: login.accessToken, generation: 0,
+          chatgpt_account_id: login.accountId, chatgpt_plan_type: null, outcome: "reconciled" };
+      },
+    };
+    rig.client.releaseCodex = async () => {
+      apiCalls++;
+      throw new Error("/codex/release must not be called for a worker-host run");
+    };
+    rig.client.refreshCodex = async () => {
+      apiCalls++;
+      throw new Error("/codex/refresh must not be called for a worker-host run");
+    };
+    rig.transport
+      .push(threadStarted())
+      // The real app-server auth owner proactively refreshes during this turn.
+      .push({ kind: "activity", method: "account/chatgptAuthTokens/refresh", requestId: 991,
+        params: { reason: "unauthorized", previousAccountId: null } })
+      .push(signalDone())
+      .push(turnCompleted("completed"))
+      .end();
+
+    const executor = new CodexExecutor(noopLog, "/data/agent-home/host-run", {
+      binding: bindingOf(SUBSCRIPTION), client: rig.client as never, credentialBridge: bridge, provider,
+    }, {
+      ...rig.deps,
+      spawnCommand: answerEnvProbe(rig.deps.spawnCommand!, rig.probeCalls),
+    });
+    await withTimeout(executor.run(makeCtx().ctx), 3000, "worker-host Codex run");
+    // The runner's durability boundary exercises the installer reconcile after the run.
+    await executor.safety!.withBoundary({ boundary: "finalize", deadlineMs: 200 }, async () => {});
+
+    assert.ok(sourceReleases > 0, "initial epoch credential release used the host source");
+    assert.ok(sourceRefreshes > 0, "app-server refresh and durability reconcile used the host source");
+    assert.equal(apiCalls, 0, "the host executor never calls /codex/release or /codex/refresh");
+    await executor.safety!.dispose({ boundary: "terminal", deadlineMs: 200 });
+  });
+
   it("(F1) standalone (no deferRegistryTeardown): run()'s finally BACKSTOPS the registry teardown (provider root torn down)", async () => {
     const rig = makeRig();
     rig.transport.push(threadStarted()).push(signalDone()).push(turnCompleted("completed")).end();

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/vtmocanu/uzi/api/internal/pgconv"
 	"github.com/vtmocanu/uzi/api/internal/privcheck"
 	"github.com/vtmocanu/uzi/api/internal/store"
 )
@@ -547,5 +548,43 @@ func TestDeriveTaskTitle(t *testing.T) {
 	multi := strings.Repeat("é", maxTaskTitleRunes+10)
 	if got := deriveTaskTitle(multi); len([]rune(got)) != maxTaskTitleRunes {
 		t.Errorf("multi-byte truncated title has %d runes, want %d", len([]rune(got)), maxTaskTitleRunes)
+	}
+}
+
+func TestTaskDerivedRunCreatorsRejectWorkerHostSource(t *testing.T) {
+	user, repo, parent := uuid.New(), uuid.New(), uuid.New()
+	hostParent := store.Run{
+		ID: parent, UserID: user, RepoID: pgconv.UUID(repo), Harness: harnessCodex,
+		CodexCredentialSourceKind: pgtype.Text{String: "worker_host", Valid: true},
+	}
+	for _, tc := range []struct {
+		name string
+		call func(*Service) error
+	}{
+		{
+			name: "task review",
+			call: func(s *Service) error {
+				_, err := s.CreateTaskReviewRun(context.Background(), user, repo, parent, "agent/task", "main", HarnessCodex)
+				return err
+			},
+		},
+		{
+			name: "then fix",
+			call: func(s *Service) error {
+				_, err := s.CreateThenFixRun(context.Background(), user, repo, parent, "agent/task", "main", "fix", pgtype.Int4{}, pgtype.Int4{}, HarnessCodex)
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := &fakeStore{runByIDPlain: hostParent}
+			err := tc.call(New(fs, newBox(t), testParams()))
+			if !errors.Is(err, ErrHostCodexDerivedRunUnsupported) {
+				t.Fatalf("error = %v, want ErrHostCodexDerivedRunUnsupported", err)
+			}
+			if fs.taskReviewRunParams != nil || fs.thenFixRunParams != nil {
+				t.Fatal("derived run was inserted despite worker-host source")
+			}
+		})
 	}
 }

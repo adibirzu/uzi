@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/vtmocanu/uzi/api/internal/forge"
 	"github.com/vtmocanu/uzi/api/internal/store"
 	"github.com/vtmocanu/uzi/api/internal/workersvc"
@@ -176,5 +177,24 @@ func TestOnDemandReworkRowTurnedLegacyDuringCreateIs409LiveDB(t *testing.T) {
 	}
 	if rig.reworkRuns(t) != 0 {
 		t.Fatal("a run survived a refused create")
+	}
+}
+
+func TestOnDemandReworkHostCodexDerivedRunUnsupportedLiveDB(t *testing.T) {
+	rig := newReworkRig(t, &settingsStore{}, time.Minute)
+	cliMustExec(t, rig.pool, `UPDATE runs
+		SET codex_credential_source_kind = 'worker_host', codex_credential_source_id = $2,
+		    codex_credential_source_revision = 1, codex_credential_source_worker_id = $3
+		WHERE id = $1`, rig.runID, uuid.NewString(), uuid.New())
+
+	rec := rig.post(t, `{"guidance":"please address this"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d body %s, want 409", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"reason":"host_codex_derived_run_unsupported"`) {
+		t.Fatalf("body %s, want host_codex_derived_run_unsupported reason", rec.Body.String())
+	}
+	if rig.reworkRuns(t) != 0 {
+		t.Fatal("a rework run was created from a worker-host source")
 	}
 }

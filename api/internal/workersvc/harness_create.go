@@ -3,6 +3,7 @@ package workersvc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sort"
 	"strings"
@@ -46,7 +47,9 @@ var (
 	ErrCodexPoolUnavailable = errCodexPoolUnavailable
 	// ErrHostCodexSourceUnavailable means no ready worker owned by the caller
 	// currently advertises the requested opaque host-source revision.
-	ErrHostCodexSourceUnavailable = errHostCodexSourceUnavailable
+	ErrHostCodexSourceUnavailable     = errHostCodexSourceUnavailable
+	ErrHostCodexSourceAmbiguous       = errHostCodexSourceAmbiguous
+	ErrHostCodexDerivedRunUnsupported = errors.New("derived runs from a worker-host Codex source are unsupported")
 )
 
 // RawCredentialOverride is an UNVALIDATED create-time credential-override request threaded from
