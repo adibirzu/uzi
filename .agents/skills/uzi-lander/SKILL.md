@@ -495,8 +495,9 @@ For a queued sweep issue without a run ID, use the watcher's `watch-issue.sh` at
    Pass the exact SHA from `merge.sh`; never hand-complete a prefix. The poller resolves it
    through GitHub and exits 3 before polling when it is invalid or unknown.
    Exit 0 green (a partial dispatch counts; confirm a gate fix another way), 1 red (use the
-   per-job live-log commands it prints, then fix on a branch, never `main`; flake → rerun +
-   file), 2 budget exhausted, 3 no run appeared or lookup failed. `--follow` prints each
+   per-job live-log commands it prints, then fix on a branch, never `main`; flake → file, and
+   rerun only while that SHA is still the `main` head), 2 budget exhausted, 3 no run appeared
+   or lookup failed. `--follow` prints each
    `FOLLOW sha=OLD -> NEW` switch to the current branch head without resetting `--max-ticks`;
    the final verdict covers the last watched SHA. Without it, 4 superseded → re-watch the current `main` head
    (references/merge-mechanics.md). Append the terminal result to the preserved trail
@@ -680,8 +681,10 @@ session-peers registry, so a Codex thread with a shim is a peer like any Claude 
 ## Waiting, uniformly
 
 Every long wait uses a bundled poller with an owned continuation, not merely a
-background process. Claude Code's native background task and OpenCode's background
-shell can notify on exit; verify actual STARTED coverage and retain a private log.
+background process. Claude Code's native background task (the Bash tool's
+`run_in_background`, never a `&`/`nohup` inside a foreground call, which never
+notifies) and OpenCode's background shell can notify on exit; verify actual STARTED
+coverage and retain a private log.
 A Codex managed exec ID alone is not a verified wake subscription.
 
 Load session-peers' completion guidance. Use its bounded owner-only `watch start`

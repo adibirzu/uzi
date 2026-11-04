@@ -747,6 +747,13 @@ Coverage alone never justifies REVISE or BLOCK. Defects take priority within
 the 20-item cap; spare slots hold coverage, with overflow summarized literally
 as `N coverage notes omitted`. Coverage and its count do not displace defects.
 
+Each new plan round also stores one immutable, bounded snapshot of the run
+owner's own answers and revise feedback in the child table
+`cross_check_owner_steering`, written with the round row and delivered
+identically on every claim (header `X-Uzi-Owner-Steering: v1`). Only such
+plan-stage children require `cross_check_owner_steering_v1`; see the
+[#3841 amendment](adr/2149-cross-check.md#amendment-2026-11-03--3841-owner-steering-in-plan-checker-input).
+
 The worker passes every approving item (including noncoverage warning/info)
 and the complete bounded summary, including summary-only findings, to both
 executors' implementation prompts through the shared nonce fence. Absent/null
@@ -1372,7 +1379,7 @@ chain in the diagram above, with no intervening `running`.
   default, so the [pushbroker](adr/0122-checkpoint-push-broker.md) pushes it as a
   fast-forward and adoption peels it back to the real tip. Tick and iteration
   checkpoints chain over a prior overlay (when its history verifies as
-  bounded, wrapper-only) rather than being refused `not_descendant` (#2733). GitHub-only. See
+  bounded, wrapper-only) rather than being refused `not_descendant` (#2733). Chaining runs on every forge and also tolerates a server-confirmed restored `wip(park):` marker (#2753); overlays stay GitHub-only. See
   [ADR-1036](adr/1036-checkpoint-workflow-overlay.md).
 
 - **queued → claimed**: `POST /api/worker/runs/claim` atomically claims an eligible
@@ -2863,15 +2870,27 @@ pressure. All non-terminal worker-owned runs, including parks and approval waits
 block it. Requested maintenance drains unrelated run, chat and cross-check
 claims while owned runs and pinned plan checkers may finish; only an atomic terminal-only claim fence, drained local activity and fresh
 custody clearance permit gated anonymous-volume prune and stop authorization.
+One narrow exception (#3891): a separate worker-side pressure-only leg runs
+exactly `docker volume prune -f` (server API >=1.42, request pinned to 1.42 in
+its own child env) on a busy or custody-held non-ephemeral worker after two
+fresh samples at or above 85%, without closing the claim gate or waiting for
+idle, terminal runs or custody; it defers only while maintenance holds its
+fence and touches no PVC. It rides the same default-on flag. See ADR-1759 D8,
+"Exception — #3891", in
+[adr/1759-dind-data-metering-and-prune.md](adr/1759-dind-data-metering-and-prune.md).
 The controller observes the old Deployment and pods gone before deleting only
 `dind-data`, then publishes replacement readiness before reopening claims.
 DinD is scratch, including named volumes; this DinD maintenance recycle loses
 DinD state only. Since #3153 the run working directory `/data/runner` is the
 `runner-shared` subPath of the `data` PVC, so a replacement keeps it, while a
-legacy `{nix, data}` recycle deletes it (and any Docker-lane clones) as on the
-plain lane. DinD never uses ForceRoll or the drain deadline. Simultaneous pressure
-runs legacy first, DinD on a later tick; legacy busy deadlines now apply only to
-independent nondrifted maintenance, while global ForceRoll retains custody guards.
+data-PVC deletion still removes it. After the fixed #3852 controller deploys,
+Docker pressure recycling preserves `/data` independently of custody and layout:
+only an explicit `nix` cause permits Nix-only recycle. Other causes defer with
+`disk-recycle-skipped-docker-data`; plain hosted workers retain legacy nix/data
+recycling pending #3710. DinD never uses ForceRoll or the drain deadline. With
+simultaneous pressure, permitted nix recycling runs first; Docker data deferral
+lets DinD maintenance proceed. Independent nondrifted nix maintenance retains
+its busy deadline and ForceRoll behavior; Docker data remains protected.
 A custody-held Docker worker whose pod still has the old layout (an emptyDir at
 `/data/runner`) is held on it, ForceRoll included, until custody releases. Persistent drifted workers
 may receive a migration drain after ordinary admission planning, using the

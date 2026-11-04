@@ -1,5 +1,5 @@
-// The one "does this user have an Anthropic token?" gate, shared by Dashboard,
-// Board and IssueView (PRD #104 M6).
+// The shared "does this user have an Anthropic token?" gate (PRD #104 M6).
+// Dashboard uses hasUsableCredential below to cover either harness.
 //
 // It lives here rather than inlined at the three call sites for a reason the
 // review made concrete: `hasToken.test.ts` used to declare its OWN copy of the

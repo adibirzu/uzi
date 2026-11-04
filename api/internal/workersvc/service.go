@@ -1280,6 +1280,9 @@ type Store interface {
 	// (PRD #88 M1). The question id is a column, not a JSON field, because
 	// SetRunRunning's resume guard compares it in SQL.
 	CreateRunAnswerInput(ctx context.Context, arg store.CreateRunAnswerInputParams) (store.RunUserInput, error)
+	// CreateCompletionDecisionInput writes the completion_decision audit row that links an
+	// owner completion-continue ANSWER by question_id (issue #3841).
+	CreateCompletionDecisionInput(ctx context.Context, arg store.CreateCompletionDecisionInputParams) (store.RunUserInput, error)
 	ConsumeRunInputs(ctx context.Context, runID uuid.UUID) ([]store.ConsumeRunInputsRow, error)
 	ListReplayRunInputs(ctx context.Context, runID uuid.UUID) ([]store.ListReplayRunInputsRow, error)
 	// ListConsumedFollowUpInputsForRun reads the run's already-consumed follow_up inputs,
@@ -2619,6 +2622,7 @@ func (s *Service) RegisterWithCrossCheckSlots(ctx context.Context, wkr store.Wor
 	// subquery must see a credential_switch_settling hold committed while the GetWorkerForUpdate
 	// below waited on the worker lock. That needs BOTH this isolation level (a fresh statement
 	// snapshot per statement) and the lock being taken by a statement EARLIER than RegisterWorker.
+	cachedCustodyLimit := s.queuedCustodyCachedLimit(ctx)
 	tx, err := s.beginReadCommitted(ctx)
 	if err != nil {
 		return store.Worker{}, "", err
@@ -2629,6 +2633,10 @@ func (s *Service) RegisterWithCrossCheckSlots(ctx context.Context, wkr store.Wor
 			_ = tx.Rollback(ctx)
 		}
 	}()
+	queuedCustodyLimit, err := s.queuedCustodyAdmission(ctx, tx, cachedCustodyLimit)
+	if err != nil {
+		return store.Worker{}, "", err
+	}
 	if s.registerAfterBegin != nil {
 		s.registerAfterBegin()
 	}
@@ -2660,7 +2668,7 @@ func (s *Service) RegisterWithCrossCheckSlots(ctx context.Context, wkr store.Wor
 	if snapshotValid {
 		pending = s.validatePendingAll(store.Worker(row), snapshot)
 	}
-	locks, err := captureWorkerRecoveryLocks(ctx, qtx, row.ID, entries, attested, pending.ids)
+	locks, err := captureWorkerRecoveryLocksWithQueued(ctx, qtx, row.ID, entries, attested, s.queuedCustodyCandidates(queuedCustodyLimit), pending.ids)
 	if err != nil {
 		return store.Worker{}, "", err
 	}
@@ -2694,6 +2702,12 @@ func (s *Service) RegisterWithCrossCheckSlots(ctx context.Context, wkr store.Wor
 	if err != nil {
 		return store.Worker{}, "", err
 	}
+	queuedRequeuedIDs := append(append([]uuid.UUID{}, requeued...), finalizeRequeued...)
+	queuedParked, err := s.parkQueuedCustody(ctx, qtx, row.ID, prior.SnapshotRegisterNonce, queuedCustodyLimit, locks, queuedRequeuedIDs)
+	if err != nil {
+		return store.Worker{}, "", err
+	}
+	orphanFailed = append(orphanFailed, queuedParked...)
 	// (e) Commit, then publish + judge post-commit (never inside the tx).
 	if err := tx.Commit(ctx); err != nil {
 		return store.Worker{}, "", err
@@ -2737,14 +2751,18 @@ func (s *Service) publishRegisterOutcome(ctx context.Context, finalizeFailed, or
 // and maybeEnqueueJudgeByID for the committed-terminal fails (PRD #46 Decision 2, the same
 // worker-lost runs the sweeper funnels). Both are best-effort and never fail the register.
 func (s *Service) publishRegisterSweeps(ctx context.Context, failed []store.WorkerRecoveryDisposition, requeued []uuid.UUID) {
+	final := make(map[uuid.UUID]bool, len(failed))
 	for _, row := range failed {
+		final[row.ID] = true
 		s.publishSwept(row.ID, row.Status)
 		if row.Status == "failed" {
 			s.maybeEnqueueJudgeByID(ctx, row.ID)
 		}
 	}
 	for _, id := range requeued {
-		s.publishSwept(id, "queued")
+		if !final[id] {
+			s.publishSwept(id, "queued")
+		}
 	}
 }
 
@@ -2878,7 +2896,13 @@ func (s *Service) Heartbeat(ctx context.Context, wkr store.Worker, stats *Worker
 		s.replaceRunDisk(ctx, updated, stats)
 		return updated, nil
 	}
-	tx, err := s.txBeginner.Begin(ctx)
+	var cachedCustodyLimit int32
+	if snapshot != nil {
+		cachedCustodyLimit = s.queuedCustodyCachedLimit(ctx)
+	}
+	// Admission reads after the settings lock need a fresh statement snapshot,
+	// even when the connection defaults to a stricter isolation level.
+	tx, err := s.beginReadCommitted(ctx)
 	if err != nil {
 		return store.Worker{}, err
 	}
@@ -2888,6 +2912,13 @@ func (s *Service) Heartbeat(ctx context.Context, wkr store.Worker, stats *Worker
 			_ = tx.Rollback(ctx)
 		}
 	}()
+	var queuedCustodyLimit int32
+	if snapshot != nil {
+		queuedCustodyLimit, err = s.queuedCustodyAdmission(ctx, tx, cachedCustodyLimit)
+		if err != nil {
+			return store.Worker{}, err
+		}
+	}
 	qtx := store.New(tx)
 	updated, err := qtx.HeartbeatWorker(ctx, arg)
 	if err != nil {
@@ -2921,7 +2952,7 @@ func (s *Service) Heartbeat(ctx context.Context, wkr store.Worker, stats *Worker
 	if valid {
 		// Include omitted owned leads before any snapshot child or FK write.
 		pending := s.validatePendingAll(updated, snapshot)
-		locks, err = captureWorkerRecoveryLocks(ctx, qtx, updated.ID, entries, validatedFinalizeResume{}, pending.ids)
+		locks, err = captureWorkerRecoveryLocksWithQueued(ctx, qtx, updated.ID, entries, validatedFinalizeResume{}, s.queuedCustodyCandidates(queuedCustodyLimit), pending.ids)
 		if err != nil {
 			return store.Worker{}, err
 		}
@@ -2988,6 +3019,17 @@ func (s *Service) Heartbeat(ctx context.Context, wkr store.Worker, stats *Worker
 		if err != nil {
 			return store.Worker{}, err
 		}
+		requeuedIDs := make([]uuid.UUID, 0, len(missingRequeued))
+		for _, row := range missingRequeued {
+			requeuedIDs = append(requeuedIDs, row.ID)
+		}
+		queuedParked, err := s.parkQueuedCustody(ctx, qtx, updated.ID, updated.SnapshotRegisterNonce, queuedCustodyLimit, locks, requeuedIDs)
+		if err != nil {
+			return store.Worker{}, err
+		}
+		for _, row := range queuedParked {
+			missingFailed = append(missingFailed, store.FrozenFailRunsMissingFromSnapshotRow{ID: row.ID, Status: row.Status})
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return store.Worker{}, err
@@ -3017,14 +3059,18 @@ func (s *Service) Heartbeat(ctx context.Context, wkr store.Worker, stats *Worker
 		}
 		s.retainOrDeleteCheckpoint(ctx, id, cancelled.Kind, cancelled.IssueIid)
 	}
+	final := make(map[uuid.UUID]bool, len(missingFailed))
 	for _, r := range missingFailed {
+		final[r.ID] = true
 		s.publishSwept(r.ID, r.Status)
 		if r.Status == "failed" {
 			s.maybeEnqueueJudgeByID(ctx, r.ID)
 		}
 	}
 	for _, r := range missingRequeued {
-		s.publishSwept(r.ID, r.Status)
+		if !final[r.ID] {
+			s.publishSwept(r.ID, r.Status)
+		}
 	}
 	s.replaceRunDisk(ctx, updated, stats)
 	return updated, nil
@@ -3581,7 +3627,7 @@ func (s *Service) claimLane(ctx context.Context, wkr store.Worker, snapshot *Act
 	}
 	pending := s.validatePendingAll(locked, snapshot)
 	pending.scoped = &scopedPendingClaim{}
-	locks, err := captureWorkerRecoveryLocks(ctx, qtx, locked.ID, entries, validatedFinalizeResume{}, pending.ids)
+	locks, err := captureWorkerRecoveryLocks(ctx, qtx, locked.ID, entries, pending.ids)
 	if err != nil {
 		return nil, err
 	}
@@ -4088,8 +4134,8 @@ type StateRequest struct {
 	MrIID                     *int64  `json:"mr_iid"`
 	// Head is the EXACT source-branch tip H a `completed` report is being made against
 	// (PRD #1226 M2, D5). It is required for permit-backed INTERLOCKED completion.
-	// A headless, uncapped report-only issue completion instead validates full frozen
-	// structural delivery and a positive live claim generation under the run lock.
+	// A headless, uncapped report-only issue completion instead validates delivery of every
+	// frozen milestone not owner-deferred and a positive live claim generation under the run lock.
 	// SetState routes interlocked completion through completeRunWithPermitLease, which
 	// consumes the permit for publication completion issued for
 	// (run, contract_revision, Head) and writes `completed` in one transaction. A completed
@@ -5402,7 +5448,7 @@ func (s *Service) setStateWithTx(ctx context.Context, wkr store.Worker, runID uu
 		}
 		// PRD #1226 M2 (D4): INTERLOCKED completion runs through completeRunWithPermitLease.
 		// Headless, uncapped report-only issue completion may bypass a permit only after
-		// locked validation of full frozen structural delivery, a positive live claim
+		// locked validation of every non-deferred frozen milestone's delivery, a positive live claim
 		// generation, and absence of stored publication fields. Other completions are
 		// permit-gated: the transaction consumes the permit issued
 		// for the exact (run, contract_revision, head) and writes `completed` atomically, with a

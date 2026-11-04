@@ -1,0 +1,7 @@
+# Fork-only. no-mistakes reads this from fork main; never send it upstream.
+rebase: {strategy: merge}
+# Codex is our default author; the gate agent must be another family.
+# If Claude authors a branch, run that branch's review with a non-Claude agent
+# (owner decision).
+agent: claude
+# No commands or ignore_patterns overrides: retain normal per-PR checks.

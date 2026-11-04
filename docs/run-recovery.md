@@ -585,6 +585,20 @@ archive or prerequisite failure. Transient capture, forge and disk failures
 spend the same reservation budget. These bounds are separate from healthy
 provider/empty-turn parks and the owner worker-recovery-exhaustion hold.
 
+Before seeding a fresh attempt, the worker also checks that the data volume has
+room for it. When current or projected usage would reach the disk hard-stop
+threshold, it refuses the seed, keeps the predecessor work and custody, and
+posts a feed message beginning "retained recovery deferred:" with the observed
+usage (and the projected usage when it was computed). The refusal is not a disk
+park and spends one of the same three reservations; the worker runs one reclaim
+pass and re-checks before refusing. If the volume stays full, the iterations end
+in the existing retained-recovery park, whose automatic retries stop for owner
+Resume once the retained-park allowance is spent. The
+projection is an estimate and applies only when the API supports both the disk
+and retained-recovery park causes. The check has no off switch: setting
+`UZI_DISK_HARD_STOP_ENABLED=false` disables the hard governor's stops but not
+this admission check, which uses the same effective hard threshold either way.
+
 A verified thin bundle within the cap, with its needed prerequisites locally
 available and verified, permits local adoption and model execution even
 when remote publication is unknown. Nonempty prerequisites alone do not
@@ -2207,7 +2221,7 @@ unknown measurement does not mean zero.
 | Disposition | Meaning and next step |
 |---|---|
 | `owner_hold_discard <hold-id>` | A server hold still owns the source. Use `uzi run discard <run-id> --hold <hold-id> --yes`. |
-| `resolve_local_record` | A local recovery, settlement or terminal record still holds the source. Resolve it through its existing path; this command adds no new resolution. |
+| `resolve_local_record` | A local recovery, settlement or terminal record still protects the source. Guarded recovery records with closed server holds remain blocked, with no supported resolver yet ([follow-up #3885](https://github.com/vtmocanu/uzi/issues/3885)). Owner handling is required; an empty open-hold list does not make deletion safe. |
 | `local_discard` / `local_protected_discard` | Nothing else holds the source; it may be discarded with the command below (protected for episode or protected sources). |
 | `refused` | Named consumers still use the source. The output lists them. |
 
@@ -2226,7 +2240,8 @@ aggregate inspect reads no lifecycle and shows `run_state:not_read`, with no blo
 The disposition follows what the worker can see:
 
 - An open server hold gives `owner_hold_discard` (the refusal for an actively parked
-  run), a local record gives `resolve_local_record`, and a live flight refuses.
+  run), a local record gives `resolve_local_record` and keeps the source blocked,
+  and a live flight refuses.
 - A status the probe cannot establish (a 404, an error, a timeout or a malformed body)
   refuses with the blocker `run_state_unknown`; any other status refuses with
   `run_state_not_terminal`. Nothing is deleted.
@@ -2239,7 +2254,8 @@ requeue after a released claim, or a claim elsewhere) it reads 404, so the lefto
 refused. It stays kept, its bytes retained. An open hold of this worker on the run
 gives `owner_hold_discard` (the owner's server-side hold discard) even when the
 lifecycle read is unknown, and a cross-worker predecessor's hold can stay open; a local
-record gives `resolve_local_record`. With neither, the lifecycle read decides. Its only
+record gives `resolve_local_record` and keeps the source blocked. With neither, the
+lifecycle read decides. Its only
 automatic reclaim is a later run of that branch's terminal-orphan handling on this
 worker, which moves the clone to `<dataDir>/runner-quarantine/` (retained, never deleted
 automatically; automatic retention deletion is disabled) and frees
