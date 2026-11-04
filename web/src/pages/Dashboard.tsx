@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { api, isTerminalRun, type AdminUsage, type RunSummaryItem, type RunStatus, type SelfUsage, type Worker } from "../lib/api";
-import { hasAnthropicToken } from "../lib/hasToken";
+import { hasUsableCredential } from "../lib/hasToken";
 import {
   isAccountCooldownWaiting,
   effectiveRunStatus,
@@ -149,13 +149,14 @@ export function Dashboard() {
     let cancelled = false;
     (async () => {
       try {
-        const [{ runs }, { workers }, { repos }, { templates }, { secrets }, { connections }, selfUsage, adminUsage] =
+        const [{ runs }, { workers }, { repos }, { templates }, { secrets }, settingsResult, { connections }, selfUsage, adminUsage] =
           await Promise.all([
             api.listRuns({ view: "summary" }),
             api.listWorkers(),
             api.listRepos(),
             api.listAgentTemplates(),
             api.listSecrets(),
+            api.getMySettings().catch(() => null),
             api.listConnections(),
             // Usage is best-effort (.catch → null) so it can never fail the core load,
             // and the admin view is fetched ONLY for an admin — a non-admin never hits
@@ -164,6 +165,7 @@ export function Dashboard() {
             user?.is_admin ? api.getAdminUsage().catch(() => null) : Promise.resolve(null),
           ]);
         if (cancelled) return;
+        const settings = settingsResult?.settings;
         setData({
           runs,
           workers,
@@ -171,7 +173,7 @@ export function Dashboard() {
           workersTotal: workers.length,
           reposEnabled: repos.filter((r) => r.enabled).length,
           templates: templates.length,
-          hasToken: hasAnthropicToken(secrets),
+          hasToken: hasUsableCredential(secrets, settings?.codex_account_mode),
           hasForge: connections.length > 0,
           selfUsage,
           adminUsage,
@@ -373,8 +375,8 @@ export function Dashboard() {
             <Step
               done={data.hasToken}
               index={1}
-              title="Add your Anthropic token"
-              hint="Agents run on your own credentials; the token is encrypted at rest."
+              title="Add a model credential"
+              hint="Agents run on your own credentials; your credential is encrypted at rest."
               to="/settings"
               cta="Settings"
             />
