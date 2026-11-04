@@ -245,6 +245,14 @@ func (h *Handler) WorkerRegister(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Unlike soft observability reports, host-source metadata controls claim
+	// eligibility. Reject malformed metadata before Register mutates any worker row.
+	if source := req.CodexHostSource; source != nil {
+		if _, parseErr := uuid.Parse(source.SourceID); parseErr != nil || source.SourceRevision <= 0 || (source.Ready && !slices.Contains(capability.FilterProtocol(req.ProtocolCapabilities), capability.CodexHostLoginV1)) {
+			httpx.Error(w, http.StatusBadRequest, "invalid codex_host_source")
+			return
+		}
+	}
 	// template is untrusted worker self-report bound for the DB + web UI. Bound it
 	// to a tight charset (workertmpl.WellFormed) and DROP anything else to empty
 	// (persisted as NULL) rather than 400 — a soft observability field must never
@@ -319,10 +327,6 @@ func (h *Handler) WorkerRegister(w http.ResponseWriter, r *http.Request) {
 	// accept it unless this worker also advertises the protocol that consumes it.
 	if req.CodexHostSource != nil {
 		source := req.CodexHostSource
-		if _, parseErr := uuid.Parse(source.SourceID); parseErr != nil || source.SourceRevision <= 0 || (source.Ready && !slices.Contains(capability.FilterProtocol(req.ProtocolCapabilities), capability.CodexHostLoginV1)) {
-			httpx.Error(w, http.StatusBadRequest, "invalid codex_host_source")
-			return
-		}
 		if h.q == nil {
 			httpx.Error(w, http.StatusInternalServerError, "internal error")
 			return

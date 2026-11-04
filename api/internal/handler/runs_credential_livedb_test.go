@@ -116,6 +116,46 @@ func TestCreateRunCredentialOverrideAbsentIsNullLiveDB(t *testing.T) {
 	}
 }
 
+// TestCreateRunWorkerHostCodexSourceRefusalsLiveDB drives the real create transaction:
+// malformed metadata is a request error, while a syntactically valid source with no
+// ready worker owned by this user is the distinct availability conflict.
+func TestCreateRunWorkerHostCodexSourceRefusalsLiveDB(t *testing.T) {
+	ctx := context.Background()
+	f := newStartRunGuardFixture(ctx, t)
+	repoID := f.seedEnabledRepoWithIssue(ctx, t, 5291, 7, protClean)
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want int
+	}{
+		{
+			name: "malformed source id",
+			body: map[string]any{"issue_iid": 7, "codex_credential_source": map[string]any{"kind": "worker_host", "source_id": "not-a-uuid", "source_revision": 1}},
+			want: http.StatusBadRequest,
+		},
+		{
+			name: "non codex harness",
+			body: map[string]any{"issue_iid": 7, "harness": "claude", "codex_credential_source": map[string]any{"kind": "worker_host", "source_id": uuid.NewString(), "source_revision": 1}},
+			want: http.StatusBadRequest,
+		},
+		{
+			name: "no ready own source",
+			body: map[string]any{"issue_iid": 7, "harness": "codex", "codex_credential_source": map[string]any{"kind": "worker_host", "source_id": uuid.NewString(), "source_revision": 1}},
+			want: http.StatusConflict,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := f.createRunWithOverride(t, repoID, tc.body)
+			if w.Code != tc.want {
+				t.Fatalf("status=%d, want %d: %s", w.Code, tc.want, w.Body.String())
+			}
+			if n := f.runCount(ctx, t, repoID); n != 0 {
+				t.Fatalf("refused host source inserted %d run(s)", n)
+			}
+		})
+	}
+}
+
 // TestCreateRunCredentialOverrideInheritClearsLiveDB (M2, D5) proves an explicit
 // {mode:"inherit"} resolves to nil (clear both columns) — the token vocabulary is consistent
 // with set-token even though for a create it is the same as omitting.

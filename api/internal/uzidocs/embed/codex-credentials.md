@@ -198,10 +198,13 @@ as `api/internal/codexauth`, coalesces in-process requests, and serializes
 processes with an owner-only sidecar lock. It rechecks the file under that lock
 before a network call, adopts a newer CLI write, and otherwise atomically
 renames a `0600` replacement that preserves unknown Codex fields and a rotated
-refresh token. Do not run an interactive CLI against this dedicated home while
-uzi owns it. `invalid_grant`/401 closes the source for re-login; an ambiguous
-reply is not retried blindly. The API source becomes unready on each heartbeat
-when file validation fails, so later runs stay queued.
+refresh token. The file and, where supported, its directory are fsynced;
+filesystems without directory fsync keep atomic rename but have no post-crash
+publish-durability promise. Do not run an interactive CLI against this
+dedicated home while uzi owns it. Refresh-token rejection closes the source for
+re-login; a changed login file clears that latch, and an ambiguous reply is not
+retried blindly. The API source becomes unready on each heartbeat when file
+validation fails, so later runs stay queued.
 
 It does not yet provide host meter reports, source-aware parking/cooldown
 admission, Mini native deployment, or a UID-split deployment recipe. See

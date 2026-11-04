@@ -49,7 +49,7 @@ import { uidSplitActive } from "./runner-uid.js";
 import { resolveDockerWiring, dockerSidecarExpected, type DockerWiring } from "./docker-wiring.js";
 import { probeCodexRuntime } from "./codex/codex-runtime-probe.js";
 import { landlockProbeForMode, resolveCodexHarnessAvailability } from "./codex/codex-capability.js";
-import { openHostCodexCredentialSource, type HostCodexCredentialSource } from "./codex/host-credential-source.js";
+import { HostCredentialSourceError, openHostCodexCredentialSource, type HostCodexCredentialSource } from "./codex/host-credential-source.js";
 import { reapCodexCommandOrphans, type ReapOrphansResult } from "./codex/launcher.js";
 import { SECRET_PATH_PREFIXES, workerSecretDenyPaths } from "./guardrails.js";
 import type {
@@ -314,8 +314,14 @@ export function buildRunExecutor(runId: string, codex: ClaimCodexSecrets | undef
     let login;
     try {
       login = source.read();
-    } catch {
-      return { executor: new FailClosedExecutor("worker-host Codex source is unavailable") };
+    } catch (error) {
+      return {
+        executor: new FailClosedExecutor(
+          error instanceof HostCredentialSourceError && error.reason === "needs_relogin"
+            ? "worker-host Codex credential needs re-login"
+            : "worker-host Codex source is unavailable",
+        ),
+      };
     }
     // An explicit, narrow local bridge — never clone WorkerClient, because cloned
     // mutable client state can silently diverge. This path has no API release or
@@ -500,7 +506,7 @@ async function main(): Promise<void> {
   let hostCodexSource: HostCodexCredentialSource | undefined;
   if (config.codexCredentialSource.kind === "worker_host") {
     const source = openHostCodexCredentialSource(config.codexCredentialSource.home, config.dataDir);
-	  hostCodexSource = source;
+    hostCodexSource = source;
     config.codexHostSource = {
       sourceId: source.sourceId,
       sourceRevision: source.sourceRevision,
@@ -708,7 +714,7 @@ async function main(): Promise<void> {
   // this process's live config/log/client/sdkHomeRoot.
   const makeExecutor: ExecutorFactory = (runId, codex) =>
     buildRunExecutor(runId, codex, {
-	  hostCodexSource,
+      hostCodexSource,
       log,
       client,
       sdkHomeRoot,
