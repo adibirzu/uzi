@@ -560,6 +560,30 @@ func TestCIAutofixBranchInUseSwallows(t *testing.T) {
 	}
 }
 
+func TestCIAutofixHostCodexDerivedRunUnsupportedRecordsPipeline(t *testing.T) {
+	// A worker-host Codex parent can never mint a derived CI-fix run. It is a
+	// permanent refusal, so recording the pipeline prevents an error-level retry loop.
+	st := &cfStore{candidates: []store.ListCIAutofixCandidateRefsRow{cfCand(9001)}}
+	runs := &cfRuns{err: workersvc.ErrHostCodexDerivedRunUnsupported}
+	notifier := &cfNotifier{}
+	f := &cfForge{jobs: []forge.Job{cfJob()}, logTail: "boom"}
+
+	newCF(st, runs, notifier).detect(context.Background(), cfRepoRow(), f)
+
+	if len(runs.calls) != 1 {
+		t.Fatalf("expected one create attempt, got %d", len(runs.calls))
+	}
+	if len(st.upserts) != 0 {
+		t.Fatalf("a permanent refusal must not advance the counter, upserts=%d", len(st.upserts))
+	}
+	if len(f.notes) != 0 || len(notifier.calls) != 0 {
+		t.Fatalf("a permanent refusal must not comment/notify: notes=%d notifs=%d", len(f.notes), len(notifier.calls))
+	}
+	if len(st.records) != 1 || st.records[0].LastPipelineID.Int64 != 9001 {
+		t.Fatalf("expected a silent RecordCIAutofixPipeline of 9001, got %+v", st.records)
+	}
+}
+
 func TestCIAutofixIssuelessBranchFiresNoComment(t *testing.T) {
 	// PRD #908 M2: a scheduled-run branch (`uzi/prompt-…`, `uzi/self-improve/…`) does not
 	// parse to an issue iid, and the detector now PROCESSES it — the ci_fix run still fires;

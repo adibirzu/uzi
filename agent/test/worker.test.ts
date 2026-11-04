@@ -9,8 +9,7 @@ import { api, client, fx, gitlabClaim, fakeGitlab, runnerWith, installHarness, d
 import { commitInTree } from "./runner-codex-sinks-fixture.js";
 import { nullLogger } from "./helpers.js";
 import type { Config } from "../src/config.js";
-import type { WorkerClient } from "../src/client.js";
-import { RequestError } from "../src/client.js";
+import { RequestError, WorkerClient } from "../src/client.js";
 import type { RunRunner } from "../src/runner.js";
 import type { ChatRunner } from "../src/chat-runner.js";
 import type { JudgeRunner } from "../src/judge-runner.js";
@@ -1188,6 +1187,97 @@ describe("Worker — codex_harness_v1 conditional advertisement (PRD #1332 D3 / 
       !absent?.includes(CODEX_CUSTOM_MODEL_CAPABILITY),
       "codex_custom_model_v1 absent when the availability result is absent",
     );
+  });
+
+  it("reports a lost host login as unready on heartbeat", async () => {
+    const controller = new AbortController();
+    const wires: Array<{ path: string; body: Record<string, unknown> }> = [];
+    let ready = true;
+    const client = new WorkerClient("http://worker-host.test", "fixture-worker-token", "test", nullLogger(), {
+      fetch: async (url, init) => {
+        wires.push({ path: new URL(String(url)).pathname, body: JSON.parse(String(init?.body)) });
+        if (String(url).endsWith("/register")) return Response.json({ worker_id: "worker-1", protocol_features: [] });
+        return new Response(null, { status: 204 });
+      },
+    });
+    const worker = new Worker(fakeConfig({ codexHarness: { advertise: true, degraded: false, landlock: "available" }, codexHostSource: { sourceId: "11111111-1111-4111-8111-111111111111", sourceRevision: 1, ready: false }, codexHostReadiness: () => ({ sourceId: "11111111-1111-4111-8111-111111111111", sourceRevision: 1, ready }) }),
+      client, { ...noResumeRecoveries, execute: async () => {} } as unknown as RunRunner, {} as unknown as ChatRunner,
+      noJudge, noReview, recordingLogger().logger, okPreflight);
+    const done = worker.run(controller.signal);
+    try {
+      for (let i = 0; i < 300 && !wires.some(wire => wire.path.endsWith("/heartbeat")); i++) await tick();
+      ready = false;
+      for (let i = 0; i < 300 && !wires.filter(wire => wire.path.endsWith("/heartbeat")).some(wire => (wire.body.codex_host_source as { ready?: boolean } | undefined)?.ready === false); i++) await tick();
+    } finally {
+      controller.abort();
+      await done;
+    }
+    const registration = wires.find(wire => wire.path.endsWith("/register"));
+    assert.equal((registration?.body.codex_host_source as { ready?: boolean } | undefined)?.ready, true);
+    assert.ok((registration?.body.protocol_capabilities as string[] | undefined)?.includes("codex_host_login_v1"));
+    assert.ok(wires.filter(wire => wire.path.endsWith("/heartbeat")).some(wire => (wire.body.codex_host_source as { ready?: boolean } | undefined)?.ready === false));
+  });
+
+  it("registers a host source as unready when Codex is not advertisable", async () => {
+    const controller = new AbortController();
+    let registration: Record<string, unknown> | undefined;
+    const client = new WorkerClient("http://worker-host.test", "fixture-worker-token", "test", nullLogger(), {
+      fetch: async (url, init) => {
+        if (String(url).endsWith("/register")) {
+          registration = JSON.parse(String(init?.body));
+          return Response.json({ worker_id: "worker-1", protocol_features: [] });
+        }
+        return new Response(null, { status: 204 });
+      },
+    });
+    const worker = new Worker(fakeConfig({
+      codexHarness: { advertise: false, degraded: true, landlock: "unavailable" },
+      codexHostSource: { sourceId: "11111111-1111-4111-8111-111111111111", sourceRevision: 1, ready: false },
+      codexHostReadiness: () => ({ sourceId: "11111111-1111-4111-8111-111111111111", sourceRevision: 1, ready: true }),
+    }), client, { ...noResumeRecoveries, execute: async () => {} } as unknown as RunRunner,
+    {} as unknown as ChatRunner, noJudge, noReview, recordingLogger().logger, okPreflight);
+    const done = worker.run(controller.signal);
+    try {
+      for (let i = 0; i < 300 && !registration; i++) await tick();
+      assert.equal((registration?.codex_host_source as { ready?: boolean } | undefined)?.ready, false);
+      assert.ok(!(registration?.protocol_capabilities as string[] | undefined)?.includes("codex_host_login_v1"));
+    } finally {
+      controller.abort();
+      await done;
+    }
+  });
+
+  it("omits host-source metadata and capability when no host source is configured", async () => {
+    const controller = new AbortController();
+    const wires: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const client = new WorkerClient("http://worker-host.test", "fixture-worker-token", "test", nullLogger(), {
+      fetch: async (url, init) => {
+        wires.push({ path: new URL(String(url)).pathname, body: JSON.parse(String(init?.body)) });
+        if (String(url).endsWith("/register")) return Response.json({ worker_id: "worker-1", protocol_features: [] });
+        return new Response(null, { status: 204 });
+      },
+    });
+    const worker = new Worker(fakeConfig({ codexHarness: { advertise: true, degraded: false, landlock: "available" } }), client,
+      { ...noResumeRecoveries, execute: async () => {} } as unknown as RunRunner, {} as unknown as ChatRunner,
+      noJudge, noReview, recordingLogger().logger, okPreflight);
+    const done = worker.run(controller.signal);
+    try {
+      for (let i = 0; i < 300 && !wires.some(wire => wire.path.endsWith("/heartbeat")); i++) await tick();
+    } finally {
+      controller.abort();
+      await done;
+    }
+    const registration = wires.find(wire => wire.path.endsWith("/register"));
+    assert.ok(registration);
+    const protocolCapabilities = registration.body.protocol_capabilities;
+    assert.ok(Array.isArray(protocolCapabilities));
+    assert.ok(protocolCapabilities.includes(CODEX_HARNESS_CAPABILITY));
+    assert.ok(!protocolCapabilities.includes("codex_host_login_v1"));
+    const reports = wires.filter(wire => wire.path.endsWith("/register") || wire.path.endsWith("/heartbeat"));
+    assert.ok(reports.some(wire => wire.path.endsWith("/heartbeat")));
+    for (const wire of reports) {
+      assert.equal(wire.body.codex_host_source, undefined);
+    }
   });
 });
 

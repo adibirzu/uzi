@@ -1260,6 +1260,7 @@ type Run struct {
 	CodexCredentialSourceKind     pgtype.Text        `json:"codex_credential_source_kind"`
 	CodexCredentialSourceID       pgtype.Text        `json:"codex_credential_source_id"`
 	CodexCredentialSourceRevision pgtype.Int8        `json:"codex_credential_source_revision"`
+	CodexCredentialSourceWorkerID pgtype.UUID        `json:"codex_credential_source_worker_id"`
 }
 
 type RunCompletionAttempt struct {

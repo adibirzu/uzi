@@ -1538,6 +1538,10 @@ export class WorkerClient {
   private registerNonce: string | undefined;
   private codexHostSource: { sourceId: string; sourceRevision: number; ready: boolean } | undefined;
 
+  setCodexHostSource(source: { sourceId: string; sourceRevision: number; ready: boolean } | undefined): void {
+    this.codexHostSource = source;
+  }
+
   /** Defensive copy of the successful register's original implemented report and fixed limits. */
   private registrationReport: Omit<NonNullable<HeartbeatRequest["protocol_refresh"]>, "register_nonce"> | undefined;
 

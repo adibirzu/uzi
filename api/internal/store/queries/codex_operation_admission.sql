@@ -24,9 +24,26 @@ WHERE r.id = @run_id::uuid AND r.user_id = @user_id::uuid AND r.worker_id = @wor
   AND CASE WHEN pg_input_is_valid(r.codex_account_key, 'jsonb')
            THEN r.codex_account_key::jsonb = jsonb_build_array(a.provider_user_id, a.workspace_account_id)
            ELSE false END
+UNION ALL
+SELECT r.id AS run_id, r.user_id, NULL::uuid AS provider_account_id, r.gate_revision, r.gate_presentation_id,
+       'linked'::text AS coord_state,
+       EXISTS (SELECT 1 FROM run_user_inputs i
+         WHERE i.run_id = r.id AND i.kind = 'revise_plan'
+           AND i.gate_binding = 'bound' AND i.gate_revision = r.gate_revision
+           AND i.consumed_at IS NOT NULL AND i.applied_at IS NULL
+           AND i.disposition IS DISTINCT FROM 'superseded'
+           AND i.consumed_worker_id = r.worker_id
+           AND i.consumed_claim_generation = r.claim_generation)::boolean AS revision_active
+FROM runs r
+WHERE r.id = @run_id::uuid AND r.user_id = @user_id::uuid AND r.worker_id = @worker_id::uuid
+  AND r.claim_generation = @claim_generation::bigint AND r.claim_generation > 0
+  AND r.claim_released_at IS NULL AND r.status IN ('claimed', 'running', 'awaiting_approval')
+  AND r.harness = 'codex' AND r.codex_credential_source_kind = 'worker_host'
+  AND r.codex_credential_source_worker_id = @worker_id::uuid
 )
 SELECT authority.*, clock_timestamp()::timestamptz AS server_now,
- codex_admission_run_eligible_at(authority.run_id)::timestamptz AS eligible_at, t.episode_id,
+ CASE WHEN authority.provider_account_id IS NULL THEN NULL::timestamptz
+      ELSE codex_admission_run_eligible_at(authority.run_id)::timestamptz END AS eligible_at, t.episode_id,
  (CASE WHEN t.rate_expiry IS NOT NULL AND
   (t.overload_expiry IS NULL OR t.rate_expiry >= t.overload_expiry)
   THEN 'rate_limit' ELSE 'overload' END)::text AS class

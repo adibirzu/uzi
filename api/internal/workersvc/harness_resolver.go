@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/vtmocanu/uzi/api/internal/codexselect"
+	"github.com/vtmocanu/uzi/api/internal/pgconv"
 	"github.com/vtmocanu/uzi/api/internal/store"
 )
 
@@ -72,6 +73,7 @@ var (
 	// errHostCodexSourceUnavailable distinguishes an invalid/stale host source at
 	// create time from an ordinary missing server credential.
 	errHostCodexSourceUnavailable = errors.New("worker-host Codex source is not ready for this user")
+	errHostCodexSourceAmbiguous   = errors.New("multiple worker-host Codex sources are ready for this user")
 	// errNoCredentialForHarness is the typed refusal when an EXPLICIT harness was asked
 	// for but that harness has no usable credential. Explicit selection never falls back
 	// to the other harness (D4), so this is terminal for that request — the resolver does
@@ -191,8 +193,9 @@ type resolvedHarness struct {
 // HostCodexSource is deliberately only routing metadata.  The API never receives
 // a path, account id, token, refresh token, or sealed login for this source.
 type HostCodexSource struct {
-	ID       string
-	Revision int64
+	ID        string
+	Revision  int64
+	Automatic bool
 }
 
 type hostCodexSourceContextKey struct{}
@@ -205,7 +208,14 @@ func WithHostCodexSource(ctx context.Context, source HostCodexSource) context.Co
 
 func hostCodexSourceFromContext(ctx context.Context) (HostCodexSource, bool) {
 	s, ok := ctx.Value(hostCodexSourceContextKey{}).(HostCodexSource)
-	return s, ok && s.ID != "" && s.Revision > 0
+	return s, ok && (s.Automatic || (s.ID != "" && s.Revision > 0))
+}
+
+func rejectHostDerivedRun(run store.Run) error {
+	if run.CodexCredentialSourceKind.Valid && run.CodexCredentialSourceKind.String == "worker_host" {
+		return ErrHostCodexDerivedRunUnsupported
+	}
+	return nil
 }
 
 // harnessResolverStore is the narrow C1-frozen read surface the store-backed resolver
@@ -669,13 +679,32 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 	// any Codex freeze, so a create that does not fully succeed commits nothing.
 	defer func() { _ = tx.Rollback(ctx) }()
 	qtx := store.New(tx)
+	var hostWorkerID uuid.UUID
 	if hostRequested {
-		ready, readyErr := qtx.HasReadyWorkerCodexHostSource(ctx, store.HasReadyWorkerCodexHostSourceParams{UserID: userID, SourceID: hostSource.ID, SourceRevision: hostSource.Revision})
-		if readyErr != nil {
-			return store.Run{}, resolvedHarness{}, readyErr
-		}
-		if !ready {
-			return store.Run{}, resolvedHarness{}, errHostCodexSourceUnavailable
+		heartbeatCutoff := pgconv.Time(s.now().Add(-s.p.WorkerHeartbeatStale))
+		if hostSource.Automatic {
+			sources, e := qtx.ListReadyWorkerCodexHostSources(ctx, store.ListReadyWorkerCodexHostSourcesParams{UserID: userID, HeartbeatCutoff: heartbeatCutoff})
+			if e != nil {
+				return store.Run{}, resolvedHarness{}, e
+			}
+			switch len(sources) {
+			case 0:
+				return store.Run{}, resolvedHarness{}, errHostCodexSourceUnavailable
+			case 1:
+				hostWorkerID = sources[0].ID
+				hostSource.ID = sources[0].CodexHostSourceID.String
+				hostSource.Revision = sources[0].CodexHostSourceRevision.Int64
+			default:
+				return store.Run{}, resolvedHarness{}, errHostCodexSourceAmbiguous
+			}
+		} else {
+			hostWorkerID, err = qtx.GetReadyWorkerCodexHostSource(ctx, store.GetReadyWorkerCodexHostSourceParams{UserID: userID, SourceID: hostSource.ID, SourceRevision: hostSource.Revision, HeartbeatCutoff: heartbeatCutoff})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return store.Run{}, resolvedHarness{}, errHostCodexSourceUnavailable
+			}
+			if err != nil {
+				return store.Run{}, resolvedHarness{}, err
+			}
 		}
 	}
 
@@ -795,7 +824,7 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 	}
 
 	if hostRequested {
-		n, ferr := qtx.FreezeRunCodexHostBinding(ctx, store.FreezeRunCodexHostBindingParams{ID: run.ID, UserID: userID, SourceID: hostSource.ID, SourceRevision: hostSource.Revision})
+		n, ferr := qtx.FreezeRunCodexHostBinding(ctx, store.FreezeRunCodexHostBindingParams{ID: run.ID, UserID: userID, SourceID: hostSource.ID, SourceRevision: hostSource.Revision, WorkerID: hostWorkerID})
 		if ferr != nil {
 			return store.Run{}, resolvedHarness{}, ferr
 		}

@@ -853,7 +853,8 @@ func (s *Service) codexFreezeZeroRows(ctx context.Context, q codexFreezeStore, r
 // stays byte-identical.
 func (s *Service) codexClaimSecrets(ctx context.Context, wkr store.Worker, run store.Run) (secrets *ClaimCodexSecrets, claimErr error) {
 	if run.CodexCredentialSourceKind.Valid && run.CodexCredentialSourceKind.String == "worker_host" {
-		if !run.CodexCredentialSourceID.Valid || !run.CodexCredentialSourceRevision.Valid || run.CodexCredentialSourceRevision.Int64 <= 0 ||
+		if !run.CodexCredentialSourceWorkerID.Valid || uuid.UUID(run.CodexCredentialSourceWorkerID.Bytes) != wkr.ID ||
+			!run.CodexCredentialSourceID.Valid || !run.CodexCredentialSourceRevision.Valid || run.CodexCredentialSourceRevision.Int64 <= 0 ||
 			!wkr.CodexHostSourceReady || !wkr.CodexHostSourceID.Valid || !wkr.CodexHostSourceRevision.Valid ||
 			wkr.CodexHostSourceID.String != run.CodexCredentialSourceID.String || wkr.CodexHostSourceRevision.Int64 != run.CodexCredentialSourceRevision.Int64 {
 			return nil, ErrCodexWorkerMismatch

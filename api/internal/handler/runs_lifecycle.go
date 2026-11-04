@@ -164,12 +164,8 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.CodexCredentialSource != nil {
 		source := req.CodexCredentialSource
-		if source.Kind != "worker_host" || source.SourceRevision <= 0 {
-			httpx.Error(w, http.StatusBadRequest, "codex_credential_source must be a worker_host source with a positive revision")
-			return
-		}
-		if _, err := uuid.Parse(source.SourceID); err != nil {
-			httpx.Error(w, http.StatusBadRequest, "codex_credential_source.source_id must be a uuid")
+		if source.Kind != "worker_host" {
+			httpx.Error(w, http.StatusBadRequest, "codex_credential_source must be a worker_host source")
 			return
 		}
 		if explicit != nil && *explicit != workersvc.HarnessCodex {
@@ -178,7 +174,19 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 		}
 		codexHarness := workersvc.HarnessCodex
 		explicit = &codexHarness
-		r = r.WithContext(workersvc.WithHostCodexSource(r.Context(), workersvc.HostCodexSource{ID: source.SourceID, Revision: source.SourceRevision}))
+		if source.SourceID == "" && source.SourceRevision == 0 {
+			r = r.WithContext(workersvc.WithHostCodexSource(r.Context(), workersvc.HostCodexSource{Automatic: true}))
+		} else {
+			if source.SourceRevision <= 0 {
+				httpx.Error(w, http.StatusBadRequest, "codex_credential_source must have a positive revision")
+				return
+			}
+			if _, err := uuid.Parse(source.SourceID); err != nil {
+				httpx.Error(w, http.StatusBadRequest, "codex_credential_source.source_id must be a uuid")
+				return
+			}
+			r = r.WithContext(workersvc.WithHostCodexSource(r.Context(), workersvc.HostCodexSource{ID: source.SourceID, Revision: source.SourceRevision}))
+		}
 	}
 
 	// PRD #1429 M2 (D5): thread the RAW credential override (mode + optional secret id) down into
@@ -438,7 +446,9 @@ func (h *Handler) writeStartRunError(w http.ResponseWriter, r *http.Request, err
 	case errors.Is(err, workersvc.ErrCodexPoolUnavailable):
 		httpx.JSON(w, http.StatusUnprocessableEntity, codexPoolUnavailableBody())
 	case errors.Is(err, workersvc.ErrHostCodexSourceUnavailable):
-		httpx.Error(w, http.StatusConflict, "the selected worker-host Codex source is not ready")
+		httpx.JSON(w, http.StatusConflict, map[string]any{"error": "the selected worker-host Codex source is not ready", "code": "host_codex_source_unavailable"})
+	case errors.Is(err, workersvc.ErrHostCodexSourceAmbiguous):
+		httpx.JSON(w, http.StatusConflict, map[string]any{"error": "multiple worker-host Codex sources are ready; select one explicitly", "code": "host_codex_source_ambiguous"})
 	case errors.Is(err, workersvc.ErrNoCredentialForHarness):
 		// PRD #1429 M2 (D2): an EXPLICIT harness (request or pin) whose credential is unusable —
 		// 422 with the stable no_credential_for_harness classification. Never falls back.

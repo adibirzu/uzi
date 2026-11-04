@@ -1074,9 +1074,13 @@ export class Worker {
           protocolCapabilities.push(CODEX_CUSTOM_MODEL_CAPABILITY);
         }
         if (this.config.codexHostSource) {
-          this.config.codexHostSource.ready = this.config.codexHostReadiness?.() ?? false;
+          const source = this.config.codexHostReadiness?.();
+          this.config.codexHostSource = source
+            ? { ...source, ready: source.ready && !!this.config.codexHarness?.advertise }
+            : { ...this.config.codexHostSource, ready: false };
+          this.client.setCodexHostSource(this.config.codexHostSource);
         }
-        if (this.config.codexHostSource?.ready) {
+        if (this.config.codexHostSource?.ready && this.config.codexHarness?.advertise) {
           protocolCapabilities.push("codex_host_login_v1");
         }
         // issue #3639: the settlement capability rides only with the pressure capability (the same guard), so a worker
@@ -1183,7 +1187,11 @@ export class Worker {
         // Revalidate the dedicated host source every heartbeat. A deleted, swapped,
         // malformed or re-login-needed file becomes unready before the next claim.
         if (this.config.codexHostSource) {
-          this.config.codexHostSource.ready = this.config.codexHostReadiness?.() ?? false;
+          const source = this.config.codexHostReadiness?.();
+          this.config.codexHostSource = source
+            ? { ...source, ready: source.ready && !!this.config.codexHarness?.advertise }
+            : { ...this.config.codexHostSource, ready: false };
+          this.client.setCodexHostSource(this.config.codexHostSource);
         }
         // PRD #1391 M5: report per-run outbox depth alongside the resource sample. The
         // client sends the array only when the server negotiated `heartbeat_outbox`,

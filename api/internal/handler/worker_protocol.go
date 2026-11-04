@@ -248,7 +248,7 @@ func (h *Handler) WorkerRegister(w http.ResponseWriter, r *http.Request) {
 	// Unlike soft observability reports, host-source metadata controls claim
 	// eligibility. Reject malformed metadata before Register mutates any worker row.
 	if source := req.CodexHostSource; source != nil {
-		if _, parseErr := uuid.Parse(source.SourceID); parseErr != nil || source.SourceRevision <= 0 || (source.Ready && !slices.Contains(capability.FilterProtocol(req.ProtocolCapabilities), capability.CodexHostLoginV1)) {
+		if _, parseErr := uuid.Parse(source.SourceID); parseErr != nil || source.SourceRevision <= 0 {
 			httpx.Error(w, http.StatusBadRequest, "invalid codex_host_source")
 			return
 		}
@@ -323,15 +323,17 @@ func (h *Handler) WorkerRegister(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	// The source report contains only an opaque random id and readiness; do not
-	// accept it unless this worker also advertises the protocol that consumes it.
+	// The source report contains only opaque routing metadata. A worker may report
+	// a local source before its Codex runtime is advertisable; retain its identity
+	// but force it unready until it advertises the protocol that consumes it.
 	if req.CodexHostSource != nil {
 		source := req.CodexHostSource
 		if h.q == nil {
 			httpx.Error(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		if _, err := h.q.SetWorkerCodexHostSource(r.Context(), store.SetWorkerCodexHostSourceParams{ID: wkr.ID, SourceID: pgconv.Text(source.SourceID), SourceRevision: pgconv.Int8Ptr(&source.SourceRevision), Ready: pgconv.BoolPtr(&source.Ready)}); err != nil {
+		ready := source.Ready && slices.Contains(capability.FilterProtocol(req.ProtocolCapabilities), capability.CodexHostLoginV1)
+		if _, err := h.q.SetWorkerCodexHostSource(r.Context(), store.SetWorkerCodexHostSourceParams{ID: wkr.ID, SourceID: pgconv.Text(source.SourceID), SourceRevision: pgconv.Int8Ptr(&source.SourceRevision), Ready: pgconv.BoolPtr(&ready)}); err != nil {
 			slog.Error("worker host Codex source", "error", err)
 			httpx.Error(w, http.StatusInternalServerError, "internal error")
 			return

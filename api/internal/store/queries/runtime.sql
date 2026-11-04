@@ -199,7 +199,7 @@ LEFT JOIN worker_upgrade_reports rh ON rh.worker_id = w.id
 WHERE w.user_id = @user_id AND w.id = @worker_id;
 
 -- name: SetWorkerCodexHostSource :execrows
--- Non-secret registration metadata only.  A missing source clears readiness.
+-- Dedicated non-secret source report; an omitted registration report preserves it.
 UPDATE workers
 SET codex_host_source_id = sqlc.narg('source_id')::text,
     codex_host_source_revision = sqlc.narg('source_revision')::bigint,
@@ -207,17 +207,34 @@ SET codex_host_source_id = sqlc.narg('source_id')::text,
     updated_at = now()
 WHERE id = @id;
 
--- name: HasReadyWorkerCodexHostSource :one
--- Create-time admission only: a later loss holds the run queued rather than
--- silently substituting a server-held credential.
-SELECT EXISTS (
-    SELECT 1 FROM workers
-    WHERE user_id = @user_id
-      AND codex_host_source_ready
-      AND codex_host_source_id = @source_id::text
-      AND codex_host_source_revision = @source_revision::bigint
-      AND 'codex_host_login_v1' = ANY(protocol_capabilities)
-);
+-- name: GetReadyWorkerCodexHostSource :one
+-- Create-time admission and exact-worker binding. A later loss holds the run
+-- queued rather than silently substituting a server-held credential.
+SELECT id FROM workers
+WHERE user_id = @user_id
+  AND status = 'online'
+  AND last_heartbeat_at >= @heartbeat_cutoff
+  AND codex_host_source_ready
+  AND codex_host_source_id = @source_id::text
+  AND codex_host_source_revision = @source_revision::bigint
+  AND 'codex_host_login_v1' = ANY(protocol_capabilities)
+  AND 'codex_harness_v1' = ANY(protocol_capabilities)
+  AND 'codex_runtime_v2' = ANY(protocol_capabilities)
+ORDER BY id
+LIMIT 1;
+
+-- name: ListReadyWorkerCodexHostSources :many
+SELECT id, codex_host_source_id, codex_host_source_revision FROM workers
+WHERE user_id = @user_id
+  AND status = 'online'
+  AND last_heartbeat_at >= @heartbeat_cutoff
+  AND codex_host_source_ready
+  AND codex_host_source_id IS NOT NULL
+  AND codex_host_source_revision IS NOT NULL
+  AND 'codex_host_login_v1' = ANY(protocol_capabilities)
+  AND 'codex_harness_v1' = ANY(protocol_capabilities)
+  AND 'codex_runtime_v2' = ANY(protocol_capabilities)
+ORDER BY id;
 
 -- name: RegisterWorker :one
 -- Worker announces version + its self-reported template and comes online;
@@ -290,9 +307,6 @@ WITH prev AS (
         -- slice from any caller (pgx encodes a nil []string as SQL NULL): a nil report
         -- stores '{}', not NULL.
         protocol_capabilities = COALESCE(@protocol_capabilities::text[], '{}'),
-		codex_host_source_id = sqlc.narg('codex_host_source_id')::text,
-		codex_host_source_revision = sqlc.narg('codex_host_source_revision')::bigint,
-		codex_host_source_ready = COALESCE(sqlc.narg('codex_host_source_ready')::boolean, false),
         max_concurrent_runs = sqlc.narg('max_concurrent_runs'),
         max_cross_check_slots = sqlc.narg('max_cross_check_slots'),
         -- online_since is the api-owned uptime anchor (PRD #251 M1): PRESERVE it if the
@@ -1297,11 +1311,13 @@ WITH claimant AS MATERIALIZED (
 		-- from normal Codex capability routing.  A missing/unready source stays queued;
 		-- it can never fall through to a server-held account on another worker.
 		AND (r.codex_credential_source_kind IS DISTINCT FROM 'worker_host'
-		     OR EXISTS (SELECT 1 FROM claimant c
-		                WHERE c.codex_host_source_ready
+		     OR (r.codex_credential_source_worker_id = @worker_id
+		         AND EXISTS (SELECT 1 FROM claimant c
+		                    WHERE c.id = @worker_id
+		                  AND c.codex_host_source_ready
 		                  AND c.codex_host_source_id = r.codex_credential_source_id
 		                  AND c.codex_host_source_revision = r.codex_credential_source_revision
-		                  AND 'codex_host_login_v1' = ANY(c.protocol_capabilities)))
+		                  AND 'codex_host_login_v1' = ANY(c.protocol_capabilities))))
       -- Interlocked Codex turns require the newer completion loop, independently of overrides.
       AND (r.completion_contract_version IS NULL
            OR NOT (r.harness = 'codex' OR r.codex_material_revision IS NOT NULL OR r.codex_secret_id IS NOT NULL)
@@ -1567,6 +1583,12 @@ WITH claimant AS MATERIALIZED (
                 -- claimant's @worker_protocol_caps).
                 AND (NOT (r.harness = 'codex' OR r.codex_material_revision IS NOT NULL OR r.codex_secret_id IS NOT NULL)
                      OR ('codex_harness_v1' = ANY(p.protocol_capabilities) AND 'codex_runtime_v2' = ANY(p.protocol_capabilities)))
+                AND (r.codex_credential_source_kind IS DISTINCT FROM 'worker_host'
+                     OR (p.id = r.codex_credential_source_worker_id
+                         AND p.codex_host_source_ready
+                         AND p.codex_host_source_id = r.codex_credential_source_id
+                         AND p.codex_host_source_revision = r.codex_credential_source_revision
+                         AND 'codex_host_login_v1' = ANY(p.protocol_capabilities)))
                 AND (r.completion_contract_version IS NULL
                      OR NOT (r.harness = 'codex' OR r.codex_material_revision IS NOT NULL OR r.codex_secret_id IS NOT NULL)
                      OR 'codex_completion_interlock_v1' = ANY(p.protocol_capabilities))
@@ -10680,6 +10702,12 @@ WHERE run.id = @run_id
   AND (NOT (run.kind = 'prompt' AND run.ci_config_guard AND EXISTS (SELECT 1 FROM job_files af WHERE af.run_id = run.id AND af.direction = 'input' AND af.state = 'attached')) OR 'ci_artifacts_v1' = ANY(w.protocol_capabilities))
   AND (NOT (run.harness = 'codex' OR run.codex_material_revision IS NOT NULL OR run.codex_secret_id IS NOT NULL)
        OR ('codex_harness_v1' = ANY(w.protocol_capabilities) AND 'codex_runtime_v2' = ANY(w.protocol_capabilities)))
+  AND (run.codex_credential_source_kind IS DISTINCT FROM 'worker_host'
+       OR (w.id = run.codex_credential_source_worker_id
+           AND w.codex_host_source_ready
+           AND w.codex_host_source_id = run.codex_credential_source_id
+           AND w.codex_host_source_revision = run.codex_credential_source_revision
+           AND 'codex_host_login_v1' = ANY(w.protocol_capabilities)))
   AND (run.completion_contract_version IS NULL
        OR NOT (run.harness = 'codex' OR run.codex_material_revision IS NOT NULL OR run.codex_secret_id IS NOT NULL)
        OR 'codex_completion_interlock_v1' = ANY(w.protocol_capabilities))
@@ -11074,6 +11102,9 @@ WHERE r.status = 'queued'
   AND COALESCE(codex_admission_run_eligible_at(r.id) <= now(), true)
   AND fn_forge_origin_provision_allowed(r, now())
   AND r.kind <> 'chat'
+  -- M1 has no owner-facing offline-host report yet (#18). A fixed host binding
+  -- can never be served by a peer or an ephemeral worker, so it is not demand here.
+  AND r.codex_credential_source_kind IS DISTINCT FROM 'worker_host'
   AND NOT EXISTS (SELECT 1 FROM cross_checks code_check
                   WHERE code_check.checker_run_id = r.id AND code_check.stage = 'code')
   -- PRD #1906 M5 (D-B): never a profile-bound run. Only a lane worker can claim one
@@ -11157,6 +11188,12 @@ WHERE r.status = 'queued'
         AND (NOT (r.kind = 'prompt' AND r.ci_config_guard AND EXISTS (SELECT 1 FROM job_files af WHERE af.run_id = r.id AND af.direction = 'input' AND af.state = 'attached')) OR 'ci_artifacts_v1' = ANY(w.protocol_capabilities))
                  AND (NOT (r.harness = 'codex' OR r.codex_material_revision IS NOT NULL OR r.codex_secret_id IS NOT NULL)
                       OR ('codex_harness_v1' = ANY(w.protocol_capabilities) AND 'codex_runtime_v2' = ANY(w.protocol_capabilities)))
+                 AND (r.codex_credential_source_kind IS DISTINCT FROM 'worker_host'
+                      OR (w.id = r.codex_credential_source_worker_id
+                          AND w.codex_host_source_ready
+                          AND w.codex_host_source_id = r.codex_credential_source_id
+                          AND w.codex_host_source_revision = r.codex_credential_source_revision
+                          AND 'codex_host_login_v1' = ANY(w.protocol_capabilities)))
                  AND (r.completion_contract_version IS NULL
                       OR NOT (r.harness = 'codex' OR r.codex_material_revision IS NOT NULL OR r.codex_secret_id IS NOT NULL)
                       OR 'codex_completion_interlock_v1' = ANY(w.protocol_capabilities))
@@ -11312,6 +11349,9 @@ WHERE r.status = 'queued'
   AND COALESCE(codex_admission_run_eligible_at(r.id) <= now(), true)
   AND fn_forge_origin_provision_allowed(r, now())
   AND r.kind <> 'chat'
+  -- See the capability-gap query above: a host-bound run has no peer or
+  -- ephemeral claimant, so M1 excludes it from provisioning demand (#18).
+  AND r.codex_credential_source_kind IS DISTINCT FROM 'worker_host'
   AND NOT EXISTS (SELECT 1 FROM cross_checks code_check
                   WHERE code_check.checker_run_id = r.id AND code_check.stage = 'code')
   -- PRD #1906 M5 (D-B): never a profile-bound run. Only a lane worker can claim one
@@ -11383,6 +11423,12 @@ WHERE r.status = 'queued'
         AND (NOT (r.kind = 'prompt' AND r.ci_config_guard AND EXISTS (SELECT 1 FROM job_files af WHERE af.run_id = r.id AND af.direction = 'input' AND af.state = 'attached')) OR 'ci_artifacts_v1' = ANY(w.protocol_capabilities))
                  AND (NOT (r.harness = 'codex' OR r.codex_material_revision IS NOT NULL OR r.codex_secret_id IS NOT NULL)
                       OR ('codex_harness_v1' = ANY(w.protocol_capabilities) AND 'codex_runtime_v2' = ANY(w.protocol_capabilities)))
+                 AND (r.codex_credential_source_kind IS DISTINCT FROM 'worker_host'
+                      OR (w.id = r.codex_credential_source_worker_id
+                          AND w.codex_host_source_ready
+                          AND w.codex_host_source_id = r.codex_credential_source_id
+                          AND w.codex_host_source_revision = r.codex_credential_source_revision
+                          AND 'codex_host_login_v1' = ANY(w.protocol_capabilities)))
                  AND (r.completion_contract_version IS NULL
                       OR NOT (r.harness = 'codex' OR r.codex_material_revision IS NOT NULL OR r.codex_secret_id IS NOT NULL)
                       OR 'codex_completion_interlock_v1' = ANY(w.protocol_capabilities))
@@ -11465,6 +11511,12 @@ WHERE r.status = 'queued'
         AND (NOT (r.kind = 'prompt' AND r.ci_config_guard AND EXISTS (SELECT 1 FROM job_files af WHERE af.run_id = r.id AND af.direction = 'input' AND af.state = 'attached')) OR 'ci_artifacts_v1' = ANY(w.protocol_capabilities))
                  AND (NOT (r.harness = 'codex' OR r.codex_material_revision IS NOT NULL OR r.codex_secret_id IS NOT NULL)
                       OR ('codex_harness_v1' = ANY(w.protocol_capabilities) AND 'codex_runtime_v2' = ANY(w.protocol_capabilities)))
+                 AND (r.codex_credential_source_kind IS DISTINCT FROM 'worker_host'
+                      OR (w.id = r.codex_credential_source_worker_id
+                          AND w.codex_host_source_ready
+                          AND w.codex_host_source_id = r.codex_credential_source_id
+                          AND w.codex_host_source_revision = r.codex_credential_source_revision
+                          AND 'codex_host_login_v1' = ANY(w.protocol_capabilities)))
                  AND (r.completion_contract_version IS NULL
                       OR NOT (r.harness = 'codex' OR r.codex_material_revision IS NOT NULL OR r.codex_secret_id IS NOT NULL)
                       OR 'codex_completion_interlock_v1' = ANY(w.protocol_capabilities))

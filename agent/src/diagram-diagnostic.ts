@@ -31,7 +31,7 @@ export function diagramIdentity(claim: Claim, extraSecrets: string[] = []): { ha
 }
 
 export type DiagramParserReason = "absent" | "valid" | "shape" | "kind" | "entries" | "title" | "node_shape" | "key" | "node_label" | "edge_shape" | "endpoints" | "edge_label";
-export type DiagramReason = Exclude<DiagramParserReason, "absent" | "valid"> | "editor_omission" | "deadline" | "invalid_codex" | "missing_factory" | "missing_credential" | "pass_failed" | "unparseable" | "missing_summary" | "zero_code" | "mermaid_bytes" | "backtick" | "region_bytes" | "diagramless" | "sizeonly";
+export type DiagramReason = Exclude<DiagramParserReason, "absent" | "valid"> | "editor_omission" | "deadline" | "invalid_codex" | "missing_factory" | "missing_credential" | "worker_host_credential" | "pass_failed" | "unparseable" | "missing_summary" | "zero_code" | "mermaid_bytes" | "backtick" | "region_bytes" | "diagramless" | "sizeonly";
 
 export function diagramEvent(
   log: Pick<Logger, "info">,

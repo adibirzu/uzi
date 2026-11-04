@@ -193,6 +193,17 @@ func TestFilterProtocol_KeepsCodexHarnessV1(t *testing.T) {
 	}
 }
 
+// TestFilterProtocol_KeepsCodexHostLoginV1 ensures a worker's local host-login
+// capability survives registration filtering, so it can be considered for a
+// worker-host Codex credential source.
+func TestFilterProtocol_KeepsCodexHostLoginV1(t *testing.T) {
+	got := FilterProtocol([]string{CodexRuntimeV2, CodexHostLoginV1, CodexHarnessV1})
+	want := []string{CodexHarnessV1, CodexHostLoginV1, CodexRuntimeV2}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("FilterProtocol = %v, want %v", got, want)
+	}
+}
+
 func TestFilterProtocol_KeepsCodexCompletionInterlockV1(t *testing.T) {
 	if got := FilterProtocol([]string{CodexCompletionInterlockV1, CodexHarnessV1}); !reflect.DeepEqual(got, []string{CodexHarnessV1, CodexCompletionInterlockV1}) {
 		t.Fatalf("FilterProtocol = %v", got)

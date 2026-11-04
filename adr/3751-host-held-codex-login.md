@@ -21,7 +21,10 @@ keeping the authentication mode `subscription`. The default source remains
 `UZI_CODEX_HOST_HOME` and a dedicated file-store `auth.json` whose parent is
 owner-only `0700`, whose file is owner-only `0600`, neither is a symlink, and
 whose bounded JSON shape is `auth_mode: chatgpt` with nested access token,
-refresh token and account identifier. Keyring-only state is rejected because
+refresh token and account identifier. Older file-store logins that omit
+`auth_mode` are accepted only when `OPENAI_API_KEY` is absent or null and no
+other auth material (`agent_identity`, `personal_access_token`,
+`bedrock_api_key`, or `bedrock_access_keys`) is present. Keyring-only state is rejected because
 there is no file to validate.
 
 The worker source receives a random opaque ID persisted under its own state
@@ -41,8 +44,13 @@ codex_credential_source = {
 
 It carries no access token, refresh token, auth-file JSON, or source path. A
 host-bound run is claimable only by the worker that owns the matching source;
-source loss leaves it queued and never falls back to a server login or API key.
+a source reported unavailable at placement leaves it queued and never falls
+back to a server login or API key.
 The normal run ownership and operation-admission checks remain server-owned.
+Operation admission for a host-bound run is authorized from the run owner, its
+bound worker, and its claim generation; it does not join a server credential.
+An owner may request `worker_host` without an ID; the create transaction binds
+their single ready source, while zero or multiple sources refuse without fallback.
 
 ## Consequences
 
@@ -57,12 +65,23 @@ Filesystems that reject directory fsync retain atomic rename but do not receive
 a post-crash durability promise. Unknown fields and a rotated refresh token are
 preserved. OAuth refresh-material rejections close the source for re-login; a
 changed on-disk login clears that latch, and ambiguous replies are never
-blind-retried. The dedicated home must not be used by an interactive CLI while
-uzi owns it. Readiness is revalidated on every heartbeat, so a lost source is
+blind-retried. The dedicated home must be used by exactly one worker and must not be used by an interactive CLI while
+uzi owns it. A lock records its boot and PID-namespace identity, so only a dead
+owner in the same namespace is reclaimed; a restarted container that cannot
+prove the prior owner is dead requires manual removal. Reclaimers recheck the
+directory entry before unlinking; this narrows but does not close the dead-owner
+race, so exactly one worker per dedicated home remains the guard. Every other
+lock waits for a bounded interval then requires an operator to
+confirm exclusive use before manual removal. Readiness is revalidated on every heartbeat, so a lost source is
 unclaimable rather than claimed and failed. There is intentionally a bounded
 between-heartbeat window: a source can become unready just after its report and
 one already-admissible run can still be claimed, then fails closed in the
 executor rather than receiving a server-credential fallback.
+
+Derived runs ultimately inherit the same bound worker, source ID, and revision.
+Until that handoff is implemented, M1 rejects every child or successor of a
+host-bound run with a typed unsupported-derived-run reason before credential
+resolution; it never substitutes a server Codex or Claude credential.
 
 API-host meters, source-aware parking/cooldown admission, and native
 Mini/UID-split deployment are separate milestones. The M1 bridge does not call

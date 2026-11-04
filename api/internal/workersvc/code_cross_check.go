@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -61,6 +62,9 @@ func (s *Service) SubmitCodeCrossCheck(ctx context.Context, worker store.Worker,
 	harness, known := oppositeHarness(lead.Harness)
 	if !known {
 		return result, ErrCrossCheckRefused
+	}
+	if err := rejectHostDerivedRun(lead); err != nil {
+		return result, fmt.Errorf("submit code cross-check: %w", err)
 	}
 	// Check immutable retries before credential resolution, while holding the lead lock.
 	tx, e := s.txBeginner.Begin(ctx)

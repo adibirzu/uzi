@@ -308,7 +308,13 @@ export function buildRunExecutor(runId: string, codex: ClaimCodexSecrets | undef
   let codexClient: Pick<WorkerClient, "releaseCodex" | "refreshCodex"> = client;
   if (selection.kind === "worker_host") {
     const source = deps.hostCodexSource;
-    if (!source || source.sourceId !== selection.sourceId || source.sourceRevision !== selection.sourceRevision) {
+    if (!source) {
+      return { executor: new FailClosedExecutor("worker-host Codex source is unavailable") };
+    }
+    const sourceID = selection.sourceId;
+    const sourceRevision = selection.sourceRevision;
+    const sourceMatchesClaim = () => source.sourceId === sourceID && source.sourceRevision === sourceRevision;
+    if (!sourceMatchesClaim()) {
       return { executor: new FailClosedExecutor("worker-host Codex source is unavailable") };
     }
     let login;
@@ -323,6 +329,9 @@ export function buildRunExecutor(runId: string, codex: ClaimCodexSecrets | undef
         ),
       };
     }
+    if (!sourceMatchesClaim()) {
+      return { executor: new FailClosedExecutor("worker-host Codex source revision changed") };
+    }
     // An explicit, narrow local bridge — never clone WorkerClient, because cloned
     // mutable client state can silently diverge. This path has no API release or
     // refresh authority. `release` also refreshes near-expiry JWTs before use.
@@ -333,7 +342,13 @@ export function buildRunExecutor(runId: string, codex: ClaimCodexSecrets | undef
         _expected: unknown,
         signal?: AbortSignal,
       ): Promise<CodexReleaseResponse> {
+        if (!sourceMatchesClaim()) {
+          throw new HostCredentialSourceError("unavailable", "worker-host Codex source revision changed");
+        }
         const current = await source.release(signal);
+        if (!sourceMatchesClaim()) {
+          throw new HostCredentialSourceError("unavailable", "worker-host Codex source revision changed");
+        }
         return {
           auth_mode: "subscription",
           access_token: current.accessToken,
@@ -348,7 +363,13 @@ export function buildRunExecutor(runId: string, codex: ClaimCodexSecrets | undef
         _expected: unknown,
         signal?: AbortSignal,
       ): Promise<CodexRefreshResponse> {
+        if (!sourceMatchesClaim()) {
+          throw new HostCredentialSourceError("unavailable", "worker-host Codex source revision changed");
+        }
         const current = await source.refresh(signal);
+        if (!sourceMatchesClaim()) {
+          throw new HostCredentialSourceError("unavailable", "worker-host Codex source revision changed");
+        }
         return {
           auth_mode: "subscription",
           access_token: current.accessToken,
@@ -512,7 +533,7 @@ async function main(): Promise<void> {
       sourceRevision: source.sourceRevision,
       ready: source.ready(),
     };
-    config.codexHostReadiness = () => source.ready();
+    config.codexHostReadiness = () => ({ sourceId: source.sourceId, sourceRevision: source.sourceRevision, ready: source.ready() });
     log.info("host Codex credential source validated", {
       source_kind: source.kind,
       source_revision: source.sourceRevision,

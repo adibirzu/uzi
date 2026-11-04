@@ -156,6 +156,122 @@ func TestCreateRunWorkerHostCodexSourceRefusalsLiveDB(t *testing.T) {
 	}
 }
 
+func TestCreateRunWorkerHostCodexSourceAutomaticSelectionLiveDB(t *testing.T) {
+	ctx := context.Background()
+	addSource := func(t *testing.T, f startRunGuardFixture, userID uuid.UUID, status string, capabilities []string) (uuid.UUID, string, int64) {
+		t.Helper()
+		workerID := uuid.New()
+		sourceID := uuid.NewString()
+		revision := int64(7)
+		mustExecT(ctx, t, f.pool, `INSERT INTO workers
+			(id, user_id, name, token_hash, status, last_heartbeat_at, protocol_capabilities, codex_host_source_id, codex_host_source_revision, codex_host_source_ready)
+			VALUES ($1, $2, $3, $4, $5, now(), $6, $7, $8, true)`,
+			workerID, userID, "host-source-"+workerID.String(), workerID[:], status, capabilities, sourceID, revision)
+		return workerID, sourceID, revision
+	}
+	request := map[string]any{"issue_iid": 7, "codex_credential_source": map[string]any{"kind": "worker_host"}}
+	t.Run("zero own sources ignores another user", func(t *testing.T) {
+		f := newStartRunGuardFixture(ctx, t)
+		repoID := f.seedEnabledRepoWithIssue(ctx, t, 5292, 7, protClean)
+		other := uuid.New()
+		mustExecT(ctx, t, f.pool, `INSERT INTO users (id, email, password_hash) VALUES ($1, $2, 'x')`, other, "host-source-other-"+uuid.NewString()+"@e2e")
+		addSource(t, f, other, "online", []string{"codex_host_login_v1", "codex_harness_v1", "codex_runtime_v2"})
+		w := f.createRunWithOverride(t, repoID, request)
+		if w.Code != http.StatusConflict || !bytes.Contains(w.Body.Bytes(), []byte(`"host_codex_source_unavailable"`)) {
+			t.Fatalf("status=%d body=%s, want unavailable conflict", w.Code, w.Body.String())
+		}
+		if n := f.runCount(ctx, t, repoID); n != 0 {
+			t.Fatalf("unavailable automatic selection inserted %d run(s)", n)
+		}
+	})
+	t.Run("one own source binds its current metadata", func(t *testing.T) {
+		f := newStartRunGuardFixture(ctx, t)
+		repoID := f.seedEnabledRepoWithIssue(ctx, t, 5293, 7, protClean)
+		workerID, sourceID, revision := addSource(t, f, f.owner.ID, "online", []string{"codex_host_login_v1", "codex_harness_v1", "codex_runtime_v2"})
+		w := f.createRunWithOverride(t, repoID, request)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("status=%d body=%s, want created", w.Code, w.Body.String())
+		}
+		var kind, gotSourceID string
+		var gotRevision int64
+		var gotWorkerID uuid.UUID
+		if err := f.pool.QueryRow(ctx, `SELECT codex_credential_source_kind, codex_credential_source_id, codex_credential_source_revision, codex_credential_source_worker_id FROM runs WHERE repo_id=$1`, repoID).Scan(&kind, &gotSourceID, &gotRevision, &gotWorkerID); err != nil {
+			t.Fatalf("read host binding: %v", err)
+		}
+		if kind != "worker_host" || gotSourceID != sourceID || gotRevision != revision || gotWorkerID != workerID {
+			t.Fatalf("binding=(%q,%q,%d,%s), want worker_host,%q,%d,%s", kind, gotSourceID, gotRevision, gotWorkerID, sourceID, revision, workerID)
+		}
+	})
+	t.Run("multiple own sources refuse", func(t *testing.T) {
+		f := newStartRunGuardFixture(ctx, t)
+		repoID := f.seedEnabledRepoWithIssue(ctx, t, 5294, 7, protClean)
+		addSource(t, f, f.owner.ID, "online", []string{"codex_host_login_v1", "codex_harness_v1", "codex_runtime_v2"})
+		addSource(t, f, f.owner.ID, "online", []string{"codex_host_login_v1", "codex_harness_v1", "codex_runtime_v2"})
+		w := f.createRunWithOverride(t, repoID, request)
+		if w.Code != http.StatusConflict || !bytes.Contains(w.Body.Bytes(), []byte(`"host_codex_source_ambiguous"`)) {
+			t.Fatalf("status=%d body=%s, want ambiguous conflict", w.Code, w.Body.String())
+		}
+		if n := f.runCount(ctx, t, repoID); n != 0 {
+			t.Fatalf("ambiguous automatic selection inserted %d run(s)", n)
+		}
+	})
+	t.Run("offline stale source is unavailable and not ambiguous", func(t *testing.T) {
+		f := newStartRunGuardFixture(ctx, t)
+		repoID := f.seedEnabledRepoWithIssue(ctx, t, 5295, 7, protClean)
+		addSource(t, f, f.owner.ID, "offline", []string{"codex_host_login_v1", "codex_harness_v1", "codex_runtime_v2"})
+		w := f.createRunWithOverride(t, repoID, request)
+		if w.Code != http.StatusConflict || !bytes.Contains(w.Body.Bytes(), []byte(`"host_codex_source_unavailable"`)) {
+			t.Fatalf("status=%d body=%s, want unavailable conflict", w.Code, w.Body.String())
+		}
+		if n := f.runCount(ctx, t, repoID); n != 0 {
+			t.Fatalf("offline source inserted %d run(s)", n)
+		}
+
+		repoID = f.seedEnabledRepoWithIssue(ctx, t, 5296, 8, protClean)
+		workerID, sourceID, revision := addSource(t, f, f.owner.ID, "online", []string{"codex_host_login_v1", "codex_harness_v1", "codex_runtime_v2"})
+		w = f.createRunWithOverride(t, repoID, map[string]any{"issue_iid": 8, "codex_credential_source": map[string]any{"kind": "worker_host"}})
+		if w.Code != http.StatusCreated {
+			t.Fatalf("status=%d body=%s, want online source created", w.Code, w.Body.String())
+		}
+		var gotWorkerID uuid.UUID
+		var gotSourceID string
+		var gotRevision int64
+		if err := f.pool.QueryRow(ctx, `SELECT codex_credential_source_worker_id, codex_credential_source_id, codex_credential_source_revision FROM runs WHERE repo_id=$1`, repoID).Scan(&gotWorkerID, &gotSourceID, &gotRevision); err != nil {
+			t.Fatalf("read online binding: %v", err)
+		}
+		if gotWorkerID != workerID || gotSourceID != sourceID || gotRevision != revision {
+			t.Fatalf("online binding=(%s,%q,%d), want (%s,%q,%d)", gotWorkerID, gotSourceID, gotRevision, workerID, sourceID, revision)
+		}
+	})
+	t.Run("missing runtime capability is unavailable", func(t *testing.T) {
+		f := newStartRunGuardFixture(ctx, t)
+		repoID := f.seedEnabledRepoWithIssue(ctx, t, 5297, 7, protClean)
+		_, sourceID, revision := addSource(t, f, f.owner.ID, "online", []string{"codex_host_login_v1", "codex_harness_v1"})
+		w := f.createRunWithOverride(t, repoID, request)
+		if w.Code != http.StatusConflict || !bytes.Contains(w.Body.Bytes(), []byte(`"host_codex_source_unavailable"`)) {
+			t.Fatalf("automatic status=%d body=%s, want unavailable conflict", w.Code, w.Body.String())
+		}
+		w = f.createRunWithOverride(t, repoID, map[string]any{"issue_iid": 7, "codex_credential_source": map[string]any{"kind": "worker_host", "source_id": sourceID, "source_revision": revision}})
+		if w.Code != http.StatusConflict || !bytes.Contains(w.Body.Bytes(), []byte(`"host_codex_source_unavailable"`)) {
+			t.Fatalf("explicit status=%d body=%s, want unavailable conflict", w.Code, w.Body.String())
+		}
+	})
+	t.Run("stale heartbeat is unavailable", func(t *testing.T) {
+		f := newStartRunGuardFixture(ctx, t)
+		repoID := f.seedEnabledRepoWithIssue(ctx, t, 5298, 7, protClean)
+		workerID, sourceID, revision := addSource(t, f, f.owner.ID, "online", []string{"codex_host_login_v1", "codex_harness_v1", "codex_runtime_v2"})
+		mustExecT(ctx, t, f.pool, `UPDATE workers SET last_heartbeat_at=now()-interval '1 hour' WHERE id=$1`, workerID)
+		w := f.createRunWithOverride(t, repoID, request)
+		if w.Code != http.StatusConflict || !bytes.Contains(w.Body.Bytes(), []byte(`"host_codex_source_unavailable"`)) {
+			t.Fatalf("automatic status=%d body=%s, want unavailable conflict", w.Code, w.Body.String())
+		}
+		w = f.createRunWithOverride(t, repoID, map[string]any{"issue_iid": 7, "codex_credential_source": map[string]any{"kind": "worker_host", "source_id": sourceID, "source_revision": revision}})
+		if w.Code != http.StatusConflict || !bytes.Contains(w.Body.Bytes(), []byte(`"host_codex_source_unavailable"`)) {
+			t.Fatalf("explicit status=%d body=%s, want unavailable conflict", w.Code, w.Body.String())
+		}
+	})
+}
+
 // TestCreateRunCredentialOverrideInheritClearsLiveDB (M2, D5) proves an explicit
 // {mode:"inherit"} resolves to nil (clear both columns) — the token vocabulary is consistent
 // with set-token even though for a create it is the same as omitting.

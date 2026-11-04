@@ -3245,7 +3245,7 @@ export class CodexExecutor implements Executor {
     const installState = createRunLaneInstallerReconcile(
       lifecycleSignal,
       {
-        runId: ctx.runId, client: this.opts.client, binding: this.opts.binding, registerToken,
+        runId: ctx.runId, client: this.opts.credentialBridge ?? this.opts.client, binding: this.opts.binding, registerToken,
         committed: committedGeneration, isVaultLocked: () => pauseNow.vaultLock.latched,
       },
       this.deps.timeoutNow,

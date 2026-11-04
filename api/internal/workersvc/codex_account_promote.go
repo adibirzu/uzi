@@ -325,6 +325,9 @@ func (s *Service) promoteCodexAccountRunTx(ctx context.Context, q codexPromoteQu
 	if err != nil {
 		return stay, err
 	}
+	if run.CodexCredentialSourceKind.Valid && run.CodexCredentialSourceKind.String == "worker_host" {
+		return stay, nil
+	}
 	if !run.CodexSecretID.Valid {
 		if !run.CodexMaterialRevision.Valid {
 			// Never bound. Unreachable: a run enters this cause only through a park whose gate

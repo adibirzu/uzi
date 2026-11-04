@@ -89,6 +89,20 @@ func TestCodeCrossCheckOwnWorkerAdmissionLiveDB(t *testing.T) {
 	}
 }
 
+func TestCodeCrossCheckWorkerHostLeadRefusedLiveDB(t *testing.T) {
+	f := codeFixture(t)
+	w := wkrRow(t, f.env, f.workerID)
+	f.env.exec(`UPDATE runs SET codex_credential_source_kind='worker_host', codex_credential_source_id=$2,
+		codex_credential_source_revision=1, codex_credential_source_worker_id=$3 WHERE id=$1`, f.lead, uuid.NewString(), w.ID)
+	if _, err := f.svc.SubmitCodeCrossCheck(f.env.ctx, w, f.lead, 1, strings.Repeat("a", 40), strings.Repeat("b", 40)); !errors.Is(err, ErrHostCodexDerivedRunUnsupported) {
+		t.Fatalf("submit worker-host code lead: %v, want ErrHostCodexDerivedRunUnsupported", err)
+	}
+	var children int
+	if err := f.env.pool.QueryRow(f.env.ctx, `SELECT count(*) FROM runs WHERE target_run_id=$1 AND kind='cross_check'`, f.lead).Scan(&children); err != nil || children != 0 {
+		t.Fatalf("worker-host code lead children=%d err=%v, want none", children, err)
+	}
+}
+
 func TestCodeCrossCheckWorkerVersionRefusalLiveDB(t *testing.T) {
 	for _, reason := range []string{"snapshot_failed", "worker_unsupported", "checker_unavailable", "family_unavailable"} {
 		t.Run(reason, func(t *testing.T) {

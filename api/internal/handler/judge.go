@@ -499,6 +499,8 @@ func (h *Handler) RerunJudge(w http.ResponseWriter, r *http.Request) {
 			})
 		case errors.Is(err, workersvc.ErrJudgeAlreadyActive):
 			httpx.Error(w, http.StatusConflict, "a judge run is already in progress for this run")
+		case errors.Is(err, workersvc.ErrHostCodexDerivedRunUnsupported):
+			httpx.ErrorReason(w, http.StatusConflict, err.Error(), "host_codex_derived_run_unsupported")
 		default:
 			slog.Error("rerun judge", "error", err)
 			httpx.Error(w, http.StatusInternalServerError, "internal error")

@@ -97,18 +97,24 @@ func (h *Handler) CreateCIFixRun(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		switch {
-		case errors.Is(err, workersvc.ErrRepoNotFound):
-			httpx.Error(w, http.StatusNotFound, "repo not found")
-		case errors.Is(err, workersvc.ErrActiveFixExists):
-			httpx.Error(w, http.StatusConflict, "an active CI-fix run already exists for this ref")
-		case errors.Is(err, workersvc.ErrBranchInUse):
-			httpx.Error(w, http.StatusConflict, "an active run already occupies this branch")
-		default:
-			slog.Error("create ci-fix run", "error", err)
-			httpx.Error(w, http.StatusInternalServerError, "internal error")
-		}
+		writeCIFixCreateError(w, err)
 		return
 	}
 	httpx.JSON(w, http.StatusCreated, h.createdRunBody(r.Context(), runToDTO(run, h.runPriorityClass(r.Context(), run), h.cfg.RunTimeout, h.runExtensionCapSeconds(r.Context()), h.cfg.RunForgeUnreachableMaxParks, h.clock(), h.cfg.RunMaxRequeues)))
+}
+
+func writeCIFixCreateError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, workersvc.ErrRepoNotFound):
+		httpx.Error(w, http.StatusNotFound, "repo not found")
+	case errors.Is(err, workersvc.ErrActiveFixExists):
+		httpx.Error(w, http.StatusConflict, "an active CI-fix run already exists for this ref")
+	case errors.Is(err, workersvc.ErrBranchInUse):
+		httpx.Error(w, http.StatusConflict, "an active run already occupies this branch")
+	case errors.Is(err, workersvc.ErrHostCodexDerivedRunUnsupported):
+		httpx.ErrorReason(w, http.StatusConflict, err.Error(), "host_codex_derived_run_unsupported")
+	default:
+		slog.Error("create ci-fix run", "error", err)
+		httpx.Error(w, http.StatusInternalServerError, "internal error")
+	}
 }
