@@ -52,11 +52,17 @@ does not inspect ambient credential locations. One worker process owns
 proactive local refresh: it mirrors `api/internal/codexauth`'s OAuth exchange,
 single-flights in-process, serializes processes with an owner-only sidecar
 lock, compare-reads under that lock, and atomically replaces a `0600` complete
-document after fsync. Unknown fields and a rotated refresh token are preserved.
-`invalid_grant` is a closed re-login result and ambiguous replies are never
+document after file and (where the filesystem permits it) directory fsync.
+Filesystems that reject directory fsync retain atomic rename but do not receive
+a post-crash durability promise. Unknown fields and a rotated refresh token are
+preserved. OAuth refresh-material rejections close the source for re-login; a
+changed on-disk login clears that latch, and ambiguous replies are never
 blind-retried. The dedicated home must not be used by an interactive CLI while
 uzi owns it. Readiness is revalidated on every heartbeat, so a lost source is
-unclaimable rather than claimed and failed.
+unclaimable rather than claimed and failed. There is intentionally a bounded
+between-heartbeat window: a source can become unready just after its report and
+one already-admissible run can still be claimed, then fails closed in the
+executor rather than receiving a server-credential fallback.
 
 API-host meters, source-aware parking/cooldown admission, and native
 Mini/UID-split deployment are separate milestones. The M1 bridge does not call

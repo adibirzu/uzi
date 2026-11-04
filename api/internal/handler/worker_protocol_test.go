@@ -421,6 +421,31 @@ func TestWorkerRegisterToleratesProtocolCapabilities(t *testing.T) {
 	}
 }
 
+func TestWorkerHostCodexSourceMetadataRejectsBadIDOrRevisionAndAbsenceLeavesRegisterUntouched(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"bad id", `{"codex_host_source":{"source_id":"not-a-uuid","source_revision":1,"ready":true}}`, http.StatusBadRequest},
+		{"zero revision", `{"codex_host_source":{"source_id":"` + uuid.NewString() + `","source_revision":0,"ready":true}}`, http.StatusBadRequest},
+		{"absent", `{}`, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &protocolStore{}
+			h := newProtocolHandler(t, st)
+			rec := httptest.NewRecorder()
+			h.WorkerRegister(rec, workerReq(http.MethodPost, tc.body, uuid.Nil))
+			if rec.Code != tc.want {
+				t.Fatalf("register status=%d, want %d: %s", rec.Code, tc.want, rec.Body.String())
+			}
+			if tc.want == http.StatusBadRequest && st.registerArg.ID != uuid.Nil {
+				t.Fatal("invalid source metadata reached registration")
+			}
+		})
+	}
+}
+
 func TestSanitizeSelfReported(t *testing.T) {
 	// Trims, strips control chars, caps length.
 	if got := sanitizeSelfReported("  1.2.3\x07-m4 \n ", maxSelfReportedBytes); got != "1.2.3-m4" {
@@ -639,6 +664,20 @@ func TestWorkerHeartbeatAcceptsEmptyBody(t *testing.T) {
 	h.WorkerHeartbeat(rec, workerReq(http.MethodPost, "", uuid.Nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (empty body tolerated), body %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWorkerHeartbeatHostCodexSourceMetadataRejectsBadIDOrRevision(t *testing.T) {
+	for _, body := range []string{
+		`{"codex_host_source":{"source_id":"not-a-uuid","source_revision":1,"ready":true}}`,
+		`{"codex_host_source":{"source_id":"` + uuid.NewString() + `","source_revision":0,"ready":true}}`,
+	} {
+		h := newProtocolHandler(t, &protocolStore{})
+		rec := httptest.NewRecorder()
+		h.WorkerHeartbeat(rec, workerReq(http.MethodPost, body, uuid.Nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("heartbeat status=%d, want 400: %s", rec.Code, rec.Body.String())
+		}
 	}
 }
 

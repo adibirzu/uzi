@@ -1572,7 +1572,7 @@ export class WorkerClient {
    * register (process restart) regardless.
    */
   private registerNonce: string | undefined;
-	private codexHostSource: { sourceId: string; sourceRevision: number; ready: boolean } | undefined;
+  private codexHostSource: { sourceId: string; sourceRevision: number; ready: boolean } | undefined;
 
   /** Defensive copy of the successful register's original implemented report and fixed limits. */
   private registrationReport: Omit<NonNullable<HeartbeatRequest["protocol_refresh"]>, "register_nonce"> | undefined;
@@ -1830,7 +1830,7 @@ export class WorkerClient {
     maxCrossCheckSlots?: number,
     codexHostSource?: { sourceId: string; sourceRevision: number; ready: boolean },
   ): Promise<RegisterResponse> {
-	this.codexHostSource = codexHostSource;
+    this.codexHostSource = codexHostSource;
     this.codexAdmissionEpoch = {};
     for (const owned of this.codexAdmission.values()) owned.reporter.seal();
     this.revokeInterruptedCallsAuthority();
@@ -1990,7 +1990,7 @@ export class WorkerClient {
   ): Promise<boolean | undefined> {
     this.latestDindMaintenanceValue = undefined;
     const body: HeartbeatRequest = { version: this.version };
-	if (this.codexHostSource) body.codex_host_source = { source_id: this.codexHostSource.sourceId, source_revision: this.codexHostSource.sourceRevision, ready: this.codexHostSource.ready };
+    if (this.codexHostSource) body.codex_host_source = { source_id: this.codexHostSource.sourceId, source_revision: this.codexHostSource.sourceRevision, ready: this.codexHostSource.ready };
     if (this.hasFeature("heartbeat_outbox_root_unusable")) body.outbox_root_unusable = outboxRootUnusable ?? null;
     // Only attach stats when the collector produced a sample (PRD #49): an absent
     // field is the same wire shape as today, so a pre-#49 server ignores the extra

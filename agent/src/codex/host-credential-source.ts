@@ -38,6 +38,8 @@ export type HostFetch = (input: string, init: RequestInit) => Promise<Response>;
 export interface HostSourceOptions {
   fetch?: HostFetch;
   now?: () => number;
+  /** Test seam; production always uses the fixed 15-second provider deadline. */
+  refreshTimeoutMs?: number;
 }
 
 export class HostCredentialSourceError extends Error {
@@ -162,6 +164,38 @@ function same(left: HostCodexLogin, right: HostCodexLogin): boolean {
   return left.accessToken === right.accessToken && left.refreshToken === right.refreshToken;
 }
 
+const REJECTED_REFRESH_CODES = new Set([
+  "refresh_token_expired",
+  "refresh_token_reused",
+  "refresh_token_invalidated",
+  "invalid_grant",
+]);
+
+// Mirrors codexauth.parseOAuthErrorCode's precedence and closed code set. The body
+// has already passed the bounded JSON read above; provider field names remain exact.
+function refreshMaterialRejected(body: unknown): boolean {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return false;
+  const top = body as Record<string, unknown>;
+  const nested = typeof top.error === "object" && top.error !== null && !Array.isArray(top.error)
+    ? (top.error as Record<string, unknown>).code
+    : undefined;
+  const nonEmptyCode = (value: unknown): string | undefined =>
+    typeof value === "string" && value.trim() !== "" ? value : undefined;
+  const raw = nonEmptyCode(top.error) ?? nonEmptyCode(nested) ?? nonEmptyCode(top.code);
+  if (raw === undefined) return false;
+  // ASCII-only normalisation deliberately matches codexauth.normaliseOAuthCode.
+  const code = raw.trim().replace(/[A-Z]/g, character => String.fromCharCode(character.charCodeAt(0) + 32));
+  return REJECTED_REFRESH_CODES.has(code);
+}
+
+function idTokenAccount(token: string): string | undefined {
+  const auth = jwt(token)?.["https://api.openai.com/auth"];
+  const account = typeof auth === "object" && auth !== null && !Array.isArray(auth)
+    ? (auth as Record<string, unknown>).chatgpt_account_id
+    : undefined;
+  return string(account) ? account : undefined;
+}
+
 function refreshDue(login: HostCodexLogin, now: number): boolean {
   const expiration = expires(login.accessToken);
   return expiration !== undefined && expiration <= now + REFRESH_EARLY_MS;
@@ -187,6 +221,7 @@ function sourceID(state: string): string {
   try {
     fs.writeFileSync(temp, `${id}\n`, { mode: 0o600, flag: "wx" });
     fs.renameSync(temp, file);
+    fsyncDirectory(state);
     lstatOwned(file, 0o600);
     return id;
   } catch {
@@ -217,6 +252,34 @@ function lockOwnerIsDead(lock: string): boolean {
     }
   } catch {
     return false;
+  }
+}
+
+// The stale observation is only permission to try reclaiming. Recheck the exact
+// directory entry before unlinking so a holder that replaced its lock in-between
+// cannot have its fresh lock removed.
+function unchangedLock(file: string, observed: fs.Stats, content: Buffer | undefined): boolean {
+  try {
+    const current = fs.lstatSync(file);
+    if (current.dev !== observed.dev || current.ino !== observed.ino) return false;
+    return content === undefined || fs.readFileSync(file).equals(content);
+  } catch {
+    return false;
+  }
+}
+
+function fsyncDirectory(directory: string): void {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(directory, "r");
+    fs.fsyncSync(fd);
+  } catch (error) {
+    // Some supported host filesystems do not permit fsync on directories. The
+    // rename remains atomic there, but post-crash durability is not guaranteed.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EINVAL" && code !== "ENOTSUP" && code !== "EOPNOTSUPP") throw error;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
 }
 
@@ -254,6 +317,7 @@ class Source implements HostCodexCredentialSource {
   // One source owns one refresh flight: concurrent runs get the same committed login.
   private flight: Promise<HostCodexLogin> | undefined;
   private reLoginNeeded = false;
+  private rejected: HostCodexLogin | undefined;
 
   constructor(
     readonly sourceId: string,
@@ -262,6 +326,7 @@ class Source implements HostCodexCredentialSource {
     private readonly initialAccount: string,
     private readonly fetchFn: HostFetch,
     private readonly now: () => number,
+    private readonly refreshTimeoutMs: number,
   ) {}
 
   private get auth(): string {
@@ -276,10 +341,15 @@ class Source implements HostCodexCredentialSource {
   }
 
   read(): HostCodexLogin {
-    if (this.reLoginNeeded) {
-      relogin();
-    }
     const login = this.current().login;
+    if (this.reLoginNeeded) {
+      if (this.rejected && !same(login, this.rejected)) {
+        this.reLoginNeeded = false;
+        this.rejected = undefined;
+      } else {
+        relogin();
+      }
+    }
     if (login.accountId !== this.initialAccount) {
       unavailable();
     }
@@ -306,11 +376,23 @@ class Source implements HostCodexCredentialSource {
 
   private refreshFrom(observed: HostCodexLogin, signal?: AbortSignal): Promise<HostCodexLogin> {
     if (!this.flight) {
-      this.flight = this.refreshOwned(observed, signal).finally(() => {
+      // The shared owner must outlive any individual caller. Each waiter can
+      // abandon only its own wait without cancelling a rotating-token refresh.
+      this.flight = this.refreshOwned(observed).finally(() => {
         this.flight = undefined;
       });
     }
-    return this.flight;
+    return this.waitForFlight(this.flight, signal);
+  }
+
+  private waitForFlight(flight: Promise<HostCodexLogin>, signal?: AbortSignal): Promise<HostCodexLogin> {
+    if (!signal) return flight;
+    if (signal.aborted) return Promise.reject(new HostCredentialSourceError());
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(new HostCredentialSourceError());
+      signal.addEventListener("abort", abort, { once: true });
+      flight.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    });
   }
 
   // The sidecar lock is the cross-process custody boundary. It serializes this
@@ -339,16 +421,19 @@ class Source implements HostCodexCredentialSource {
           unavailable();
         }
         let stale = false;
+        let observed: fs.Stats;
+        let content: Buffer | undefined;
         try {
-          const stat = fs.lstatSync(file);
-          stale = !stat.isFile()
-            || stat.isSymbolicLink()
-            || this.now() - stat.mtimeMs > LOCK_STALE_MS
+          observed = fs.lstatSync(file);
+          if (observed.isFile()) content = fs.readFileSync(file);
+          stale = !observed.isFile()
+            || observed.isSymbolicLink()
+            || this.now() - observed.mtimeMs > LOCK_STALE_MS
             || lockOwnerIsDead(file);
         } catch {
           continue;
         }
-        if (stale) {
+        if (stale && unchangedLock(file, observed!, content)) {
           try {
             fs.unlinkSync(file);
           } catch {
@@ -361,7 +446,7 @@ class Source implements HostCodexCredentialSource {
     }
   }
 
-  private async refreshOwned(observed: HostCodexLogin, signal?: AbortSignal): Promise<HostCodexLogin> {
+  private async refreshOwned(observed: HostCodexLogin): Promise<HostCodexLogin> {
     const unlock = await this.lock();
     try {
       const current = this.current();
@@ -373,10 +458,9 @@ class Source implements HostCodexCredentialSource {
         return current.login;
       }
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
-      const abort = () => controller.abort();
-      signal?.addEventListener("abort", abort, { once: true });
+      const timeout = setTimeout(() => controller.abort(), this.refreshTimeoutMs);
       let response: Response;
+      let body: unknown;
       try {
         response = await this.fetchFn(OAUTH_TOKEN_URL, {
           method: "POST",
@@ -387,22 +471,23 @@ class Source implements HostCodexCredentialSource {
             refresh_token: current.login.refreshToken,
           }),
           signal: controller.signal,
+          redirect: "error",
         });
+        // Keep the deadline through this bounded body read: headers alone do not
+        // complete a token refresh, and the cross-process lock stays held here.
+        body = await readResponse(response);
       } catch {
         return unavailable();
       } finally {
         clearTimeout(timeout);
-        signal?.removeEventListener("abort", abort);
       }
-      const body = await readResponse(response);
       if (!response.ok) {
         if (
           (response.status === 400 || response.status === 401)
-          && typeof body === "object"
-          && body !== null
-          && (body as Record<string, unknown>).error === "invalid_grant"
+          && refreshMaterialRejected(body)
         ) {
           this.reLoginNeeded = true;
+          this.rejected = current.login;
           relogin();
         }
         unavailable();
@@ -411,6 +496,9 @@ class Source implements HostCodexCredentialSource {
         unavailable();
       }
       const reply = body as Record<string, unknown>;
+      if (string(reply.id_token) && idTokenAccount(reply.id_token) !== observed.accountId) {
+        unavailable();
+      }
       const next = {
         ...current.root,
         tokens: {
@@ -432,6 +520,7 @@ class Source implements HostCodexCredentialSource {
           fs.closeSync(fd);
         }
         fs.renameSync(temp, this.auth);
+        fsyncDirectory(this.home);
         lstatOwned(this.auth, 0o600);
       } catch {
         try {
@@ -473,6 +562,7 @@ export function openHostCodexCredentialSource(
     initial.accountId,
     opts.fetch ?? fetch,
     opts.now ?? Date.now,
+    opts.refreshTimeoutMs ?? REFRESH_TIMEOUT_MS,
   );
   source.read();
   return source;

@@ -213,6 +213,90 @@ test("invalid_grant and network errors fail closed without a retry loop or token
   assert.deepEqual(tempFiles(f2.home), [], "failure leaves no partial auth temporary file");
 });
 
+test("refresh-material rejection mirrors the API OAuth forms and an operator login clears its latch", async t => {
+  for (const tc of [
+    { name: "top-level error", body: { error: "invalid_grant" } },
+    { name: "nested error code", body: { error: { code: "refresh_token_expired" } } },
+    { name: "top-level code", body: { code: "refresh_token_reused" } },
+    { name: "empty error falls through to top-level code", body: { error: "", code: "refresh_token_reused" } },
+    { name: "invalidated at 401", body: { error: "refresh_token_invalidated" }, status: 401 },
+    { name: "500 does not prove refresh material is dead", body: { error: "invalid_grant" }, status: 500, latched: false },
+  ]) {
+    await t.test(tc.name, async t => {
+      const f = fixture(t);
+      let calls = 0;
+      const source = openHostCodexCredentialSource(f.home, f.state, {
+        fetch: async () => {
+          calls++;
+          return new Response(JSON.stringify(tc.body), { status: tc.status ?? 400 });
+        },
+      });
+      await assert.rejects(source.refresh(), error => {
+        assert.ok(error instanceof HostCredentialSourceError);
+        assert.equal(error.reason, tc.latched === false ? "unavailable" : "needs_relogin");
+        return true;
+      });
+      await assert.rejects(tc.latched === false ? source.refresh() : source.release(), closed);
+      assert.equal(calls, tc.latched === false ? 2 : 1, "only 400/401 refresh-material rejection latches re-login");
+    });
+  }
+
+  const f = fixture(t);
+  let calls = 0;
+  const source = openHostCodexCredentialSource(f.home, f.state, {
+    fetch: async () => {
+      calls++;
+      return calls === 1
+        ? new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 })
+        : new Response(JSON.stringify({ access_token: "SENTINEL-ACCESS-RECOVERED" }));
+    },
+  });
+  await assert.rejects(source.refresh(), closed);
+  fs.writeFileSync(f.auth, auth(expiredToken(), "SENTINEL-REFRESH-NEW-LOGIN"), { mode: 0o600 });
+  assert.equal((await source.release()).accessToken, "SENTINEL-ACCESS-RECOVERED");
+  assert.equal(calls, 2, "a changed on-disk login clears needs_relogin");
+});
+
+test("refresh deadline spans the body read, preserves the lock, and does not bind the flight to one waiter", async t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.auth, auth(expiredToken()), { mode: 0o600 });
+  let sawRedirectError = false;
+  const source = openHostCodexCredentialSource(f.home, f.state, {
+    refreshTimeoutMs: 40,
+    fetch: async (_url, init) => {
+      sawRedirectError = init.redirect === "error";
+      return new Response(new ReadableStream({
+        start(controller) {
+          const abort = () => controller.error(new Error("timed out"));
+          init.signal?.addEventListener("abort", abort, { once: true });
+        },
+      }));
+    },
+  });
+  const abandoning = new AbortController();
+  const first = source.refresh(abandoning.signal);
+  abandoning.abort();
+  await assert.rejects(first, closed);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(fs.existsSync(path.join(f.home, "uzi-refresh.lock")), true, "a caller abort must not release the owner lock");
+  assert.equal(sawRedirectError, true, "refresh must refuse redirect token replay");
+  await assert.rejects(source.refresh(), closed);
+  assert.equal(fs.existsSync(path.join(f.home, "uzi-refresh.lock")), false, "timeout after stalled body releases the lock");
+});
+
+test("a refreshed id token must keep the original account before publication", async t => {
+  const f = fixture(t);
+  const before = fs.readFileSync(f.auth, "utf8");
+  const source = openHostCodexCredentialSource(f.home, f.state, {
+    fetch: async () => new Response(JSON.stringify({
+      access_token: "SENTINEL-ACCESS-OTHER-ACCOUNT",
+      id_token: idToken("SENTINEL-OTHER-ACCOUNT"),
+    })),
+  });
+  await assert.rejects(source.refresh(), closed);
+  assert.equal(fs.readFileSync(f.auth, "utf8"), before, "mismatched id token must not be published");
+});
+
 test("oversized provider response is rejected closed and leaves no temporary auth file", async t => {
   const f = fixture(t);
   const source = openHostCodexCredentialSource(f.home, f.state, {
