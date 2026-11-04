@@ -151,6 +151,81 @@ UI, an API response, or a log, not even to you. If you need to change it,
 use **Replace value** to paste a new one; there is nothing to reveal or
 edit in place.
 
+## Host-held login (fork, experimental)
+
+The `adibirzu/uzi` fork has an experimental worker-host custody mode for a
+dedicated ChatGPT subscription login. It is deliberately opt-in and is not an
+alternative spelling of an imported Codex credential: the login remains on the
+worker host and must never be pasted into uzi.
+
+Create a dedicated, file-store `CODEX_HOME` on the worker host, not your usual
+`~/.codex` directory. The directory and its `auth.json` must be owned by the
+worker user and have modes `0700` and `0600`, respectively:
+
+```sh
+export CODEX_HOME=/absolute/private/uzi-codex-home
+mkdir -p "$CODEX_HOME"
+chmod 700 "$CODEX_HOME"
+codex login -c cli_auth_credentials_store=file
+chmod 600 "$CODEX_HOME/auth.json"
+```
+
+Then configure only the worker process:
+
+```sh
+UZI_CODEX_CREDENTIAL_SOURCE=worker_host
+UZI_CODEX_HOST_HOME=/absolute/private/uzi-codex-home
+```
+
+`UZI_CODEX_HOST_HOME` is the absolute path as seen by the worker process. If
+the worker runs in a container, mount the dedicated directory into that
+container and set this value to its container path; do not mount the login into
+the API, a repository worktree, or another worker.
+
+The worker refuses startup for an unknown source value, a relative path,
+missing/keyring-only login, symlink, wrong owner, permissive mode, malformed
+file, or a non-ChatGPT login. Older files without `auth_mode` are accepted only
+when `OPENAI_API_KEY` is absent or null and `agent_identity`,
+`personal_access_token`, `bedrock_api_key`, and `bedrock_access_keys` are absent.
+It never auto-discovers `HOME` or `CODEX_HOME`.
+Its host source identifier is a random opaque worker-state value, not a hash of
+the path or any credential.
+
+For a run created with `harness:"codex"` and
+`codex_credential_source:{"kind":"worker_host"}`, uzi atomically selects the
+owner's one ready host source. Supplying its opaque id and positive revision
+selects that exact source instead. No ready source, or more than one, is refused
+without a server-credential fallback. Uzi freezes only the opaque source id and
+revision. The claim is routed only to that ready worker and
+contains that metadata block only: no access token, refresh token, login blob,
+or host path leaves the worker. If a heartbeat reports its source missing,
+stale, or offline, the run remains queued: it creates no peer or ephemeral
+provisioning demand, no peer or ephemeral worker can claim it, and it never
+falls back to an imported server credential or API key.
+
+This is experimental. Use this dedicated login from exactly one worker, and do
+not run an interactive CLI against its home while uzi owns it. The worker
+refreshes the login locally and fails closed on an invalid source or unsafe
+refresh lock. It single-flights refreshes in-process, then uses an owner-only
+sidecar lock and compare-read before atomically replacing the complete `0600`
+file. It fsyncs the file and, where the filesystem permits it, the directory;
+on filesystems that reject directory fsync, atomic rename still holds but a
+post-crash durability promise does not.
+
+The lock records its boot and PID-namespace identity. Only a dead owner proven
+dead in that same namespace is reclaimed. A restarted container that cannot
+prove that condition requires manual removal; reclaiming also rechecks the
+directory entry, which narrows but cannot eliminate the dead-owner race. Other
+lock attempts wait only a bounded interval, then require an operator to confirm
+exclusive use before manual removal. If it instructs you to remove
+`uzi-refresh.lock`, first make that confirmation; exactly one worker per
+dedicated home remains the guard.
+
+It does not yet provide host meter reports, source-aware parking/cooldown
+admission, Mini native deployment, or a UID-split deployment recipe. See
+[ADR-3751](../adr/3751-host-held-codex-login.md) for the custody and rollout
+constraints.
+
 ## Status legend
 
 Each stored Codex credential shows one of four statuses:

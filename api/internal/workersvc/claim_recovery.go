@@ -330,7 +330,8 @@ func (s *Service) finishRunClaimTx(ctx context.Context, run store.Run, payload *
 	var minted *codexMintedClaimError
 	if errors.As(assemblyErr, &minted) {
 		epoch, hash = minted.epoch, minted.hash
-	} else if assemblyErr == nil && payload != nil && payload.Secrets.Codex != nil {
+	} else if assemblyErr == nil && payload != nil && payload.Secrets.Codex != nil &&
+		!(run.CodexCredentialSourceKind.Valid && run.CodexCredentialSourceKind.String == "worker_host") {
 		var secret string
 		var ok bool
 		epoch, secret, ok = parseCodexCapability(payload.Secrets.Codex.Capability)
@@ -345,7 +346,7 @@ func (s *Service) finishRunClaimTx(ctx context.Context, run store.Run, payload *
 
 	holdClass := false
 	var authorityErr error
-	if run.Harness == harnessCodex {
+	if run.Harness == harnessCodex && !(run.CodexCredentialSourceKind.Valid && run.CodexCredentialSourceKind.String == "worker_host") {
 		holdClass, authorityErr, err = classifyLockedCodexClaim(ctx, q, locked)
 		if err != nil {
 			return nil, "", err

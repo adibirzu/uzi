@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/vtmocanu/uzi/api/internal/codexselect"
+	"github.com/vtmocanu/uzi/api/internal/pgconv"
 	"github.com/vtmocanu/uzi/api/internal/store"
 )
 
@@ -69,6 +70,10 @@ type resolveHarnessInput struct {
 }
 
 var (
+	// errHostCodexSourceUnavailable distinguishes an invalid/stale host source at
+	// create time from an ordinary missing server credential.
+	errHostCodexSourceUnavailable = errors.New("worker-host Codex source is not ready for this user")
+	errHostCodexSourceAmbiguous   = errors.New("multiple worker-host Codex sources are ready for this user")
 	// errNoCredentialForHarness is the typed refusal when an EXPLICIT harness was asked
 	// for but that harness has no usable credential. Explicit selection never falls back
 	// to the other harness (D4), so this is terminal for that request — the resolver does
@@ -183,6 +188,34 @@ type resolvedHarness struct {
 	Codex          *codexCredentialChoice
 	CreationPolicy *store.GetHarnessCreationPolicyRow
 	Decision       *harnessCreationDecision
+}
+
+// HostCodexSource is deliberately only routing metadata.  The API never receives
+// a path, account id, token, refresh token, or sealed login for this source.
+type HostCodexSource struct {
+	ID        string
+	Revision  int64
+	Automatic bool
+}
+
+type hostCodexSourceContextKey struct{}
+
+// WithHostCodexSource requests the worker-host lane for this one create.  It is
+// consumed inside createRunAtomic, before the row can be committed or claimed.
+func WithHostCodexSource(ctx context.Context, source HostCodexSource) context.Context {
+	return context.WithValue(ctx, hostCodexSourceContextKey{}, source)
+}
+
+func hostCodexSourceFromContext(ctx context.Context) (HostCodexSource, bool) {
+	s, ok := ctx.Value(hostCodexSourceContextKey{}).(HostCodexSource)
+	return s, ok && (s.Automatic || (s.ID != "" && s.Revision > 0))
+}
+
+func rejectHostDerivedRun(run store.Run) error {
+	if run.CodexCredentialSourceKind.Valid && run.CodexCredentialSourceKind.String == "worker_host" {
+		return ErrHostCodexDerivedRunUnsupported
+	}
+	return nil
 }
 
 // harnessResolverStore is the narrow C1-frozen read surface the store-backed resolver
@@ -600,6 +633,10 @@ var errCodexCreateRequiresTx = errors.New("codex run creation requires an atomic
 // falls back to a non-atomic Codex insert. A Claude resolution with a nil txBeginner keeps the
 // existing cheap non-tx path (no freeze is needed).
 func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explicit *Harness, insert func(q *store.Queries, resolved resolvedHarness) (store.Run, error), origins ...harnessCreationOrigin) (store.Run, resolvedHarness, error) {
+	hostSource, hostRequested := hostCodexSourceFromContext(ctx)
+	if hostRequested && explicit != nil && *explicit != HarnessCodex {
+		return store.Run{}, resolvedHarness{}, errNoUsableCredential
+	}
 	var origin harnessCreationOrigin
 	if len(origins) > 0 {
 		origin = origins[0]
@@ -642,9 +679,42 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 	// any Codex freeze, so a create that does not fully succeed commits nothing.
 	defer func() { _ = tx.Rollback(ctx) }()
 	qtx := store.New(tx)
+	var hostWorkerID uuid.UUID
+	if hostRequested {
+		heartbeatCutoff := pgconv.Time(s.now().Add(-s.p.WorkerHeartbeatStale))
+		if hostSource.Automatic {
+			sources, e := qtx.ListReadyWorkerCodexHostSources(ctx, store.ListReadyWorkerCodexHostSourcesParams{UserID: userID, HeartbeatCutoff: heartbeatCutoff})
+			if e != nil {
+				return store.Run{}, resolvedHarness{}, e
+			}
+			switch len(sources) {
+			case 0:
+				return store.Run{}, resolvedHarness{}, errHostCodexSourceUnavailable
+			case 1:
+				hostWorkerID = sources[0].ID
+				hostSource.ID = sources[0].CodexHostSourceID.String
+				hostSource.Revision = sources[0].CodexHostSourceRevision.Int64
+			default:
+				return store.Run{}, resolvedHarness{}, errHostCodexSourceAmbiguous
+			}
+		} else {
+			hostWorkerID, err = qtx.GetReadyWorkerCodexHostSource(ctx, store.GetReadyWorkerCodexHostSourceParams{UserID: userID, SourceID: hostSource.ID, SourceRevision: hostSource.Revision, HeartbeatCutoff: heartbeatCutoff})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return store.Run{}, resolvedHarness{}, errHostCodexSourceUnavailable
+			}
+			if err != nil {
+				return store.Run{}, resolvedHarness{}, err
+			}
+		}
+	}
 
 	// Re-read the credential/default facts and resolve D11 INSIDE the transaction that commits.
-	res, err := s.resolveRunHarnessQ(ctx, userID, explicit, qtx)
+	var res resolvedHarness
+	if hostRequested {
+		res = resolvedHarness{Harness: HarnessCodex}
+	} else {
+		res, err = s.resolveRunHarnessQ(ctx, userID, explicit, qtx)
+	}
 	if err != nil {
 		return store.Run{}, resolvedHarness{}, err
 	}
@@ -653,7 +723,7 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 	if err != nil {
 		return store.Run{}, resolvedHarness{}, err
 	}
-	overflowEligible := policy.HarnessOverflowEnabled && origin.eligible(policy)
+	overflowEligible := !hostRequested && policy.HarnessOverflowEnabled && origin.eligible(policy)
 	if overflowEligible {
 		if s.codexSelectHook != nil {
 			s.codexSelectHook(ctx)
@@ -670,7 +740,10 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 			return store.Run{}, resolvedHarness{}, err
 		}
 	}
-	res, overflowPick, err := s.evaluateCreationOverflow(ctx, qtx, userID, res, policy, origin)
+	var overflowPick *codexPoolPick
+	if !hostRequested {
+		res, overflowPick, err = s.evaluateCreationOverflow(ctx, qtx, userID, res, policy, origin)
+	}
 	if err != nil {
 		return store.Run{}, resolvedHarness{}, err
 	}
@@ -750,7 +823,15 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 		}
 	}
 
-	if res.Harness == HarnessCodex {
+	if hostRequested {
+		n, ferr := qtx.FreezeRunCodexHostBinding(ctx, store.FreezeRunCodexHostBindingParams{ID: run.ID, UserID: userID, SourceID: hostSource.ID, SourceRevision: hostSource.Revision, WorkerID: hostWorkerID})
+		if ferr != nil {
+			return store.Run{}, resolvedHarness{}, ferr
+		}
+		if n != 1 {
+			return store.Run{}, resolvedHarness{}, ErrCodexBindingConflict
+		}
+	} else if res.Harness == HarnessCodex {
 		// resolveRunHarness returns Codex only with a populated choice; guard defensively so a
 		// disagreement never freezes a Codex run with no credential.
 		if res.Codex == nil {

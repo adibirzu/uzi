@@ -269,6 +269,13 @@ var ErrTaskReviewAlreadyActive = errors.New("a review run is already active for 
 // alternates providers on one review chain. An inherited-but-unusable harness fails
 // closed with ErrNoCredentialForHarness rather than creating a stranded row.
 func (s *Service) CreateTaskReviewRun(ctx context.Context, userID, repoID, targetRunID uuid.UUID, branch, baseBranch string, targetHarness Harness) (store.Run, error) {
+	target, err := s.q.GetRunByID(ctx, targetRunID)
+	if err != nil {
+		return store.Run{}, err
+	}
+	if err := rejectHostDerivedRun(target); err != nil {
+		return store.Run{}, err
+	}
 	id := uuid.New()
 	run, err := s.createRunResolved(ctx, userID, &targetHarness, func(q Store, resolved resolvedHarness) (store.Run, error) {
 		return q.CreateTaskReviewRun(ctx, store.CreateTaskReviewRunParams{
@@ -313,6 +320,13 @@ var ErrThenFixAlreadyActive = errors.New("a fix run is already active for this t
 // rides createRunResolved as an EXPLICIT selection (replacing the M1 HarnessClaude
 // stopgap), the same atomic-freeze/fail-closed treatment CreateTaskReviewRun gets.
 func (s *Service) CreateThenFixRun(ctx context.Context, userID, repoID, originalRunID uuid.UUID, branch, baseBranch, description string, budgetWall, budgetIters pgtype.Int4, originalHarness Harness) (store.Run, error) {
+	original, err := s.q.GetRunByID(ctx, originalRunID)
+	if err != nil {
+		return store.Run{}, err
+	}
+	if err := rejectHostDerivedRun(original); err != nil {
+		return store.Run{}, err
+	}
 	id := uuid.New()
 	// A then-fix INHERITS the original task's persisted budget verbatim (issue #785):
 	// budgetWall / budgetIters are the original run's stored budget_wall_seconds /

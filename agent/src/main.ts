@@ -50,9 +50,16 @@ import { uidSplitActive } from "./runner-uid.js";
 import { resolveDockerWiring, dockerSidecarExpected, type DockerWiring } from "./docker-wiring.js";
 import { probeCodexRuntime } from "./codex/codex-runtime-probe.js";
 import { landlockProbeForMode, resolveCodexHarnessAvailability } from "./codex/codex-capability.js";
+import { HostCredentialSourceError, openHostCodexCredentialSource, type HostCodexCredentialSource } from "./codex/host-credential-source.js";
 import { reapCodexCommandOrphans, type ReapOrphansResult } from "./codex/launcher.js";
 import { SECRET_PATH_PREFIXES, workerSecretDenyPaths } from "./guardrails.js";
-import type { ClaimCodexSecrets } from "./protocol.js";
+import type {
+  ClaimCodexSecrets,
+  CodexRefreshRequest,
+  CodexRefreshResponse,
+  CodexReleaseRequest,
+  CodexReleaseResponse,
+} from "./protocol.js";
 import type { CommandSandboxMode } from "./config.js";
 import { ensureRunnerTmpdir } from "./runner-tmpdir.js";
 import { createPodEpoch, restoreEpochRuntimeTmpdir } from "./pod-epoch-lock.js";
@@ -195,6 +202,8 @@ let shutdownSignal: "SIGINT" | "SIGTERM" | undefined;
  *  supplies lightweight stand-ins (a `nullLogger()`, a throwaway `WorkerClient`, a
  *  temp dir, a fabricated `DockerWiring`). */
 export interface BuildRunExecutorDeps {
+	/** Present only for the explicit worker-host source. */
+	hostCodexSource?: HostCodexCredentialSource;
   codexAdviceHarnessFactory?: import("./codex/codex-executor.js").CodexAdviceHarnessFactory;
   log: Logger;
   client: WorkerClient;
@@ -297,6 +306,84 @@ export function buildRunExecutor(runId: string, codex: ClaimCodexSecrets | undef
     return { executor: new StubExecutor(log, { planGate: stubPlanGate, homeDir: sdkHomeRoot }) };
   }
 
+  let codexClient: Pick<WorkerClient, "releaseCodex" | "refreshCodex"> = client;
+  if (selection.kind === "worker_host") {
+    const source = deps.hostCodexSource;
+    if (!source) {
+      return { executor: new FailClosedExecutor("worker-host Codex source is unavailable") };
+    }
+    const sourceID = selection.sourceId;
+    const sourceRevision = selection.sourceRevision;
+    const sourceMatchesClaim = () => source.sourceId === sourceID && source.sourceRevision === sourceRevision;
+    if (!sourceMatchesClaim()) {
+      return { executor: new FailClosedExecutor("worker-host Codex source is unavailable") };
+    }
+    let login;
+    try {
+      login = source.read();
+    } catch (error) {
+      return {
+        executor: new FailClosedExecutor(
+          error instanceof HostCredentialSourceError && error.reason === "needs_relogin"
+            ? "worker-host Codex credential needs re-login"
+            : "worker-host Codex source is unavailable",
+        ),
+      };
+    }
+    if (!sourceMatchesClaim()) {
+      return { executor: new FailClosedExecutor("worker-host Codex source revision changed") };
+    }
+    // An explicit, narrow local bridge — never clone WorkerClient, because cloned
+    // mutable client state can silently diverge. This path has no API release or
+    // refresh authority. `release` also refreshes near-expiry JWTs before use.
+    codexClient = {
+      async releaseCodex(
+        _runID: string,
+        _request: CodexReleaseRequest,
+        _expected: unknown,
+        signal?: AbortSignal,
+      ): Promise<CodexReleaseResponse> {
+        if (!sourceMatchesClaim()) {
+          throw new HostCredentialSourceError("unavailable", "worker-host Codex source revision changed");
+        }
+        const current = await source.release(signal);
+        if (!sourceMatchesClaim()) {
+          throw new HostCredentialSourceError("unavailable", "worker-host Codex source revision changed");
+        }
+        return {
+          auth_mode: "subscription",
+          access_token: current.accessToken,
+          generation: 0,
+          chatgpt_account_id: current.accountId,
+          chatgpt_plan_type: null,
+        };
+      },
+      async refreshCodex(
+        _runID: string,
+        _request: CodexRefreshRequest,
+        _expected: unknown,
+        signal?: AbortSignal,
+      ): Promise<CodexRefreshResponse> {
+        if (!sourceMatchesClaim()) {
+          throw new HostCredentialSourceError("unavailable", "worker-host Codex source revision changed");
+        }
+        const current = await source.refresh(signal);
+        if (!sourceMatchesClaim()) {
+          throw new HostCredentialSourceError("unavailable", "worker-host Codex source revision changed");
+        }
+        return {
+          auth_mode: "subscription",
+          access_token: current.accessToken,
+          generation: 0,
+          chatgpt_account_id: current.accountId,
+          chatgpt_plan_type: null,
+          outcome: "reconciled",
+        };
+      },
+    };
+    selection = { kind: "codex", binding: { authMode: "subscription" as const, accessToken: login.accessToken, capability: "worker_host", generation: 0, chatgptAccountId: login.accountId, chatgptPlanType: null } as import("./codex/select.js").CodexBinding };
+  }
+
   if (selection.kind === "codex") {
     // A validated Codex binding: the production CodexExecutor over the M3a launcher, the
     // dark core and the M1 credential bridge. Per-run owned HOME (like SdkExecutor).
@@ -309,6 +396,7 @@ export function buildRunExecutor(runId: string, codex: ClaimCodexSecrets | undef
         summaryClaimCodex: codex,
         codexAdviceHarnessFactory: deps.codexAdviceHarnessFactory,
         client,
+        ...(selection.kind === "codex" && codexClient !== client ? { credentialBridge: codexClient } : {}),
         provider: CODEX_PRODUCTION_PROVIDER,
         // The nix/devbox provisioning HOME + root stay SHARED worker-lifetime paths
         // (Decision 5): only the per-run Codex $HOME (runHome) is per-run, so warm-start
@@ -433,6 +521,25 @@ async function main(): Promise<void> {
   // descriptor is retained for the whole process; nothing here can release it.
   installWorkerLifetime(await acquireWorkerLifetime(config.dataDir, { signal: controller.signal }));
   log.info("worker lifetime lock acquired");
+
+  // Fork-only host custody is intentionally an explicit startup operation. The
+  // default server source never reaches this branch, so it performs no ambient
+  // CODEX_HOME/HOME read. The source itself retains no credential material.
+  let hostCodexSource: HostCodexCredentialSource | undefined;
+  if (config.codexCredentialSource.kind === "worker_host") {
+    const source = openHostCodexCredentialSource(config.codexCredentialSource.home, config.dataDir);
+    hostCodexSource = source;
+    config.codexHostSource = {
+      sourceId: source.sourceId,
+      sourceRevision: source.sourceRevision,
+      ready: source.ready(),
+    };
+    config.codexHostReadiness = () => ({ sourceId: source.sourceId, sourceRevision: source.sourceRevision, ready: source.ready() });
+    log.info("host Codex credential source validated", {
+      source_kind: source.kind,
+      source_revision: source.sourceRevision,
+    });
+  }
 
   // Issue #3153: when TMPDIR lives under the (now persistent) `<dataDir>/runner`, confirm it is a
   // real, worker-owned, writable directory BEFORE anything uses a temp path. A symlink or
@@ -629,6 +736,7 @@ async function main(): Promise<void> {
   // this process's live config/log/client/sdkHomeRoot.
   const makeExecutor: ExecutorFactory = (runId, codex) =>
     buildRunExecutor(runId, codex, {
+      hostCodexSource,
       log,
       client,
       sdkHomeRoot,

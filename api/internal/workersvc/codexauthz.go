@@ -852,6 +852,16 @@ func (s *Service) codexFreezeZeroRows(ctx context.Context, q codexFreezeStore, r
 // than assembling a Claude claim); an ordinary Claude run skips this entirely and its claim JSON
 // stays byte-identical.
 func (s *Service) codexClaimSecrets(ctx context.Context, wkr store.Worker, run store.Run) (secrets *ClaimCodexSecrets, claimErr error) {
+	if run.CodexCredentialSourceKind.Valid && run.CodexCredentialSourceKind.String == "worker_host" {
+		if !run.CodexCredentialSourceWorkerID.Valid || uuid.UUID(run.CodexCredentialSourceWorkerID.Bytes) != wkr.ID ||
+			!run.CodexCredentialSourceID.Valid || !run.CodexCredentialSourceRevision.Valid || run.CodexCredentialSourceRevision.Int64 <= 0 ||
+			!wkr.CodexHostSourceReady || !wkr.CodexHostSourceID.Valid || !wkr.CodexHostSourceRevision.Valid ||
+			wkr.CodexHostSourceID.String != run.CodexCredentialSourceID.String || wkr.CodexHostSourceRevision.Int64 != run.CodexCredentialSourceRevision.Int64 {
+			return nil, ErrCodexWorkerMismatch
+		}
+		rev := run.CodexCredentialSourceRevision.Int64
+		return &ClaimCodexSecrets{AuthMode: codexAuthModeSubscription, HostSourceID: run.CodexCredentialSourceID.String, HostSourceRevision: &rev}, nil
+	}
 	q, ok := s.codexStore()
 	if !ok {
 		return nil, errCodexStoreUnavailable

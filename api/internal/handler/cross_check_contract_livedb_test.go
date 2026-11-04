@@ -84,3 +84,44 @@ func TestCrossCheckAuthoritativeRoutesLiveDB(t *testing.T) {
 		t.Fatalf("foreign ownership: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestWorkerHostCrossCheckSubmissionsReturnTypedConflictLiveDB(t *testing.T) {
+	h, router, pool := cliLiveDB(t)
+	h.wsvc.SetTxBeginner(pool)
+	owner := cliSeedUser(t, pool, false)
+	conn := rmSeedConn(t, pool, owner)
+	worker := uuid.New()
+	token := "host-cross-check-" + uuid.NewString()
+	hash := sha256.Sum256([]byte(token))
+	cliMustExec(t, pool, `INSERT INTO workers(id,user_id,name,token_hash,status,protocol_capabilities)
+		VALUES($1,$2,'host-cross-check',$3,'online',ARRAY['cross_check_code_v1','cross_check_lane_v1','cross_check_rounds_v1'])`, worker, owner, hash[:])
+
+	call := func(lead uuid.UUID, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/worker/runs/"+lead.String()+"/cross-checks", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	for i, tc := range []struct {
+		name    string
+		updates string
+		body    string
+	}{
+		{"plan", "harness='claude',auto_approve=true,plan_cross_check_required=true,claim_generation=1", `{"stage":"plan","claim_generation":1,"plan_md":"plan","milestones":[],"required_capabilities":[],"required_tools":[],"size_class":"s","base_commit":"` + strings.Repeat("a", 40) + `","planning_diff":"diff"}`},
+		{"code", "harness='claude',auto_approve=false,code_cross_check_required=true,claim_generation=1", `{"stage":"code","claim_generation":1,"base_commit":"` + strings.Repeat("a", 40) + `","head_commit":"` + strings.Repeat("b", 40) + `"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := rmSeedRepo(t, pool, conn, int64(994+i), true)
+			lead := rmSeedRun(t, pool, owner, repo, "running")
+			cliMustExec(t, pool, `UPDATE runs SET worker_id=$2,`+tc.updates+`,codex_credential_source_kind='worker_host',
+				codex_credential_source_id=$3,codex_credential_source_revision=1,codex_credential_source_worker_id=$2 WHERE id=$1`, lead, worker, uuid.NewString())
+			rec := call(lead, tc.body)
+			var response map[string]any
+			if rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &response) != nil || response["reason"] != "host_codex_derived_run_unsupported" {
+				t.Fatalf("worker-host %s response: %d %s", tc.name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}

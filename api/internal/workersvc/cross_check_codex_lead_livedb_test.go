@@ -104,6 +104,18 @@ func TestCodexLeadSubmitRefusedWithoutCapabilityLiveDB(t *testing.T) {
 	}
 }
 
+func TestPlanCrossCheckWorkerHostLeadRefusedLiveDB(t *testing.T) {
+	f := newCodexLeadFix(t, "usable", true)
+	f.env.exec(`UPDATE runs SET codex_credential_source_kind='worker_host', codex_credential_source_id=$2,
+		codex_credential_source_revision=1, codex_credential_source_worker_id=$3 WHERE id=$1`, f.lead, uuid.NewString(), f.worker.ID)
+	if _, err := f.svc.SubmitPlanCrossCheck(f.env.ctx, f.worker, f.lead, 1, f.cand, 1); !errors.Is(err, ErrHostCodexDerivedRunUnsupported) {
+		t.Fatalf("submit worker-host plan lead: %v, want ErrHostCodexDerivedRunUnsupported", err)
+	}
+	if total, _ := f.children(t); total != 0 {
+		t.Fatalf("worker-host plan lead created %d children", total)
+	}
+}
+
 // An unusable Claude credential is checker_unavailable at submit; the usable Codex
 // credential never produces a Codex checker for a Codex lead.
 func TestCodexLeadSubmitNeverFallsBackToCodexCheckerLiveDB(t *testing.T) {

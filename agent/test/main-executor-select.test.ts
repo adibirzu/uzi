@@ -14,6 +14,7 @@ import type { SummaryRunner } from "../src/summary-runner.js";
 import { buildChatExecutor, buildRunExecutor, type BuildRunExecutorDeps } from "../src/main.js";
 import { ChatExecutor } from "../src/chat-executor.js";
 import type { ClaimCodexSecrets } from "../src/protocol.js";
+import { HostCredentialSourceError, type HostCodexCredentialSource } from "../src/codex/host-credential-source.js";
 
 // PRD #1429 M6 — the harness-neutral e2e stub seam (`agent/src/main.ts`).
 //
@@ -42,6 +43,11 @@ const VALID_SUBSCRIPTION_CODEX: ClaimCodexSecrets = {
 
 const SDK_HOME_ROOT = path.join(os.tmpdir(), "uzi-main-executor-select-test");
 
+const HOST_CLAIM = {
+  auth_mode: "subscription",
+  codex_credential_source: { kind: "worker_host", source_id: "11111111-1111-4111-8111-111111111111", source_revision: 1 },
+} as unknown as ClaimCodexSecrets;
+
 function baseDeps(overrides: Partial<BuildRunExecutorDeps> = {}): BuildRunExecutorDeps {
   return {
     log: nullLogger(),
@@ -58,6 +64,119 @@ function baseDeps(overrides: Partial<BuildRunExecutorDeps> = {}): BuildRunExecut
     ...overrides,
   };
 }
+
+it("worker-host binding owns proactive release and never calls WorkerClient credentials", async () => {
+  let reads = 0;
+  let localReleaseCalls = 0;
+  let localRefreshCalls = 0;
+  let workerClientCalls = 0;
+  const source: HostCodexCredentialSource = {
+    kind: "worker_host",
+    sourceId: "11111111-1111-4111-8111-111111111111",
+    sourceRevision: 1,
+    read: () => {
+      reads++;
+      return {
+        accessToken: "SENTINEL-ACCESS-0001",
+        refreshToken: "SENTINEL-REFRESH-0001",
+        accountId: "sentinel-account",
+      };
+    },
+    ready: () => true,
+    release: async () => {
+      localReleaseCalls++;
+      return {
+        accessToken: "SENTINEL-ACCESS-REFRESHED",
+        refreshToken: "SENTINEL-REFRESH-0001",
+        accountId: "sentinel-account",
+      };
+    },
+    refresh: async () => {
+      localRefreshCalls++;
+      return {
+        accessToken: "SENTINEL-ACCESS-REFRESHED",
+        refreshToken: "SENTINEL-REFRESH-0001",
+        accountId: "sentinel-account",
+      };
+    },
+  };
+  const deps = baseDeps({ hostCodexSource: source });
+  deps.client.releaseCodex = async () => { workerClientCalls++; throw new Error("server release must not run"); };
+  deps.client.refreshCodex = async () => { workerClientCalls++; throw new Error("server refresh must not run"); };
+  const result = buildRunExecutor("run-host", HOST_CLAIM, deps);
+  assert.ok(result.executor instanceof CodexExecutor);
+  const executor = result.executor as unknown as {
+    opts: { credentialBridge: Pick<WorkerClient, "releaseCodex" | "refreshCodex"> };
+  };
+  const response = await executor.opts.credentialBridge.releaseCodex(
+    "run-host",
+    { capability: "ignored" },
+    { authMode: "subscription", chatgptAccountId: "sentinel-account", minimumGeneration: 0 },
+  );
+  assert.equal(response.access_token, "SENTINEL-ACCESS-REFRESHED");
+  await executor.opts.credentialBridge.refreshCodex(
+    "run-host",
+    { capability: "ignored", operation_id: "fixture-operation", observed_generation: 0 },
+    { authMode: "subscription", chatgptAccountId: "sentinel-account" },
+  );
+  assert.equal(reads, 1, "the initial binding reads once; the explicit bridge owns later releases");
+  assert.equal(localReleaseCalls, 1, "initial executor release delegates to local proactive refresh owner");
+  assert.equal(localRefreshCalls, 1);
+  assert.equal(workerClientCalls, 0, "worker-host source never calls /codex/release or /codex/refresh");
+});
+
+it("worker-host source revision drift refuses initial and bridge token use", async () => {
+  let revision = 1;
+  let phase: "initial" | "release" | "refresh" = "initial";
+  const source: HostCodexCredentialSource = {
+    kind: "worker_host",
+    sourceId: "11111111-1111-4111-8111-111111111111",
+    get sourceRevision() { return revision; },
+    read: () => {
+      if (phase === "initial") revision++;
+      return { accessToken: "SENTINEL-ACCESS", refreshToken: "SENTINEL-REFRESH", accountId: "sentinel-account" };
+    },
+    ready: () => true,
+    release: async () => {
+      if (phase === "release") revision++;
+      return { accessToken: "SENTINEL-ACCESS", refreshToken: "SENTINEL-REFRESH", accountId: "sentinel-account" };
+    },
+    refresh: async () => {
+      if (phase === "refresh") revision++;
+      return { accessToken: "SENTINEL-ACCESS", refreshToken: "SENTINEL-REFRESH", accountId: "sentinel-account" };
+    },
+  };
+  let result = buildRunExecutor("run-host-revision-initial", HOST_CLAIM, baseDeps({ hostCodexSource: source }));
+  assert.ok(result.executor instanceof FailClosedExecutor);
+
+  revision = 1;
+  phase = "release";
+  result = buildRunExecutor("run-host-revision-release", HOST_CLAIM, baseDeps({ hostCodexSource: source }));
+  assert.ok(result.executor instanceof CodexExecutor);
+  const bridge = (result.executor as unknown as {
+    opts: { credentialBridge: Pick<WorkerClient, "releaseCodex" | "refreshCodex"> };
+  }).opts.credentialBridge;
+  await assert.rejects(
+    bridge.releaseCodex("run-host-revision-release", { capability: "ignored" }, {
+      authMode: "subscription", chatgptAccountId: "sentinel-account", minimumGeneration: 0,
+    }),
+    (error: unknown) => error instanceof HostCredentialSourceError && error.reason === "unavailable",
+  );
+
+  revision = 1;
+  phase = "refresh";
+  result = buildRunExecutor("run-host-revision-refresh", HOST_CLAIM, baseDeps({ hostCodexSource: source }));
+  assert.ok(result.executor instanceof CodexExecutor);
+  const refreshBridge = (result.executor as unknown as {
+    opts: { credentialBridge: Pick<WorkerClient, "releaseCodex" | "refreshCodex"> };
+  }).opts.credentialBridge;
+  await assert.rejects(
+    refreshBridge.refreshCodex("run-host-revision-refresh", { capability: "ignored", operation_id: "fixture-operation", observed_generation: 0 }, {
+      authMode: "subscription", chatgptAccountId: "sentinel-account",
+    }),
+    (error: unknown) => error instanceof HostCredentialSourceError && error.reason === "unavailable",
+  );
+});
 
 it("2833 forwards shared advice factory to Codex summary runner while stub stays inert", async () => {
   const builds: CodexAdviceHarnessBuildParams[] = [];

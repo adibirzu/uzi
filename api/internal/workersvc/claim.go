@@ -552,14 +552,33 @@ type ClaimCodexSecrets struct {
 	Capability  string `json:"-"`
 	// Generation is a pointer so subscription generation zero remains distinguishable from
 	// api_key absence. MarshalJSON turns those into the two exact wire shapes.
-	Generation       *int64 `json:"-"`
-	ChatGPTAccountID string `json:"-"`
+	Generation         *int64 `json:"-"`
+	ChatGPTAccountID   string `json:"-"`
+	HostSourceID       string `json:"-"`
+	HostSourceRevision *int64 `json:"-"`
 }
 
 // MarshalJSON encodes the two auth modes as distinct wire shapes. Keeping the api_key
 // shape separate makes it impossible for a nil plan to become an accidental
 // chatgpt_plan_type:null field on API-key responses.
 func (c ClaimCodexSecrets) MarshalJSON() ([]byte, error) {
+	if c.HostSourceRevision != nil {
+		if c.AuthMode != codexAuthModeSubscription || c.HostSourceID == "" || *c.HostSourceRevision <= 0 || c.AccessToken != "" || c.Capability != "" || c.Generation != nil || c.ChatGPTAccountID != "" {
+			return nil, errors.New("codex worker-host claim has invalid credential material")
+		}
+		return json.Marshal(struct {
+			AuthMode         string `json:"auth_mode"`
+			CredentialSource struct {
+				Kind           string `json:"kind"`
+				SourceID       string `json:"source_id"`
+				SourceRevision int64  `json:"source_revision"`
+			} `json:"codex_credential_source"`
+		}{AuthMode: c.AuthMode, CredentialSource: struct {
+			Kind           string `json:"kind"`
+			SourceID       string `json:"source_id"`
+			SourceRevision int64  `json:"source_revision"`
+		}{Kind: "worker_host", SourceID: c.HostSourceID, SourceRevision: *c.HostSourceRevision}})
+	}
 	switch c.AuthMode {
 	case codexAuthModeSubscription:
 		if c.Generation == nil || c.ChatGPTAccountID == "" {

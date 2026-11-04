@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/vtmocanu/uzi/api/internal/capability"
 	"github.com/vtmocanu/uzi/api/internal/store"
@@ -127,6 +128,292 @@ func TestClaimOrdinaryClaudeRunUnaffectedByCodexGateLiveDB(t *testing.T) {
 	}
 	if run.Harness != harnessClaude {
 		t.Fatalf("ordinary run harness = %q, want claude", run.Harness)
+	}
+}
+
+// TestClaimWorkerHostCodexSourcePlacementLiveDB keeps the host-owned source as a
+// hard exact-worker gate. It uses ClaimRun's generated SQL against Postgres because
+// the EXISTS predicate cannot be meaningfully proven by a fake store.
+func TestClaimWorkerHostCodexSourcePlacementLiveDB(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		ready      bool
+		revision   int64
+		capability bool
+		owner      bool
+		wantClaim  bool
+	}{
+		{"own ready exact source", true, 7, true, true, true},
+		{"unready source", false, 7, true, true, false},
+		{"revision mismatch", true, 8, true, true, false},
+		{"another ready worker reports the same source", true, 7, true, false, false},
+		{"host capability absent", true, 7, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := setupInterlockLiveDB(t)
+			caps := []string{capability.CodexHarnessV1, capability.CodexRuntimeV2}
+			if tc.capability {
+				caps = append(caps, capability.CodexHostLoginV1)
+			}
+			claimant := e.seedWorker(t, caps)
+			owner := claimant
+			if !tc.owner {
+				owner = e.seedWorker(t, append(caps, capability.CodexHostLoginV1))
+			}
+			sourceID := uuid.NewString()
+			e.exec(t, `UPDATE workers
+			           SET codex_host_source_id=$2, codex_host_source_revision=$3, codex_host_source_ready=$4
+			           WHERE id=$1`, owner, sourceID, int64(7), tc.ready)
+			if !tc.owner {
+				e.exec(t, `UPDATE workers
+				           SET codex_host_source_id=$2, codex_host_source_revision=$3, codex_host_source_ready=true
+				           WHERE id=$1`, claimant, sourceID, int64(7))
+			}
+			runID := e.seedCodexQueuedRun(t)
+			e.exec(t, `UPDATE runs
+			           SET codex_credential_source_kind='worker_host',
+			               codex_credential_source_id=$2,
+			               codex_credential_source_revision=$3,
+			               codex_credential_source_worker_id=$4
+			           WHERE id=$1`, runID, sourceID, tc.revision, owner)
+
+			run, err := e.q.ClaimRun(e.ctx, e.claimParams(claimant, caps, false))
+			if tc.wantClaim {
+				if err != nil {
+					t.Fatalf("own ready source must claim: %v", err)
+				}
+				if run.ID != runID {
+					t.Fatalf("claimed %v, want %v", run.ID, runID)
+				}
+				return
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatalf("host-gated run claimed by ineligible worker: run=%v err=%v", run.ID, err)
+			}
+			if status := e.runStatus(t, runID); status != "queued" {
+				t.Fatalf("blocked host run status=%q, want queued", status)
+			}
+		})
+	}
+}
+
+func TestClaimWorkerHostCodexSourceRejectsNonOwnerBeforeClaimLiveDB(t *testing.T) {
+	e := setupInterlockLiveDB(t)
+	caps := []string{capability.CodexHarnessV1, capability.CodexRuntimeV2, capability.CodexHostLoginV1}
+	owner := e.seedWorker(t, caps)
+	nonOwner := e.seedWorker(t, caps)
+	sourceID := uuid.NewString()
+	e.exec(t, `UPDATE workers
+	           SET codex_host_source_id=$2, codex_host_source_revision=7, codex_host_source_ready=true
+	           WHERE id=$1`, owner, sourceID)
+	e.exec(t, `UPDATE workers
+	           SET codex_host_source_id=$2, codex_host_source_revision=7, codex_host_source_ready=true
+	           WHERE id=$1`, nonOwner, sourceID)
+	runID := e.seedCodexQueuedRun(t)
+	e.exec(t, `UPDATE runs
+	           SET codex_credential_source_kind='worker_host',
+	               codex_credential_source_id=$2,
+	               codex_credential_source_revision=7,
+	               codex_credential_source_worker_id=$3
+	           WHERE id=$1`, runID, sourceID, owner)
+
+	if _, err := e.q.ClaimRun(e.ctx, e.claimParams(nonOwner, caps, false)); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("non-owning worker claim error=%v, want no rows", err)
+	}
+	if status := e.runStatus(t, runID); status != "queued" {
+		t.Fatalf("non-owner claim status=%q, want queued", status)
+	}
+	claimed, err := e.q.ClaimRun(e.ctx, e.claimParams(owner, caps, false))
+	if err != nil {
+		t.Fatalf("owning worker claim: %v", err)
+	}
+	if claimed.ID != runID {
+		t.Fatalf("claimed %v, want %v", claimed.ID, runID)
+	}
+}
+
+func TestClaimWorkerHostCodexSourcePeerSpreadLiveDB(t *testing.T) {
+	e := setupInterlockLiveDB(t)
+	caps := []string{capability.CodexHarnessV1, capability.CodexRuntimeV2, capability.CodexHostLoginV1}
+	owner := e.seedSpreadWorker(t, caps, 2)
+	e.seedActiveRunOwnedBy(t, owner)
+	e.seedSpreadWorker(t, caps, 2)
+	sourceID := uuid.NewString()
+	e.exec(t, `UPDATE workers
+	           SET codex_host_source_id=$2, codex_host_source_revision=7, codex_host_source_ready=true
+	           WHERE id=$1`, owner, sourceID)
+	runID := e.seedCodexQueuedRun(t)
+	e.exec(t, `UPDATE runs
+	           SET codex_credential_source_kind='worker_host',
+	               codex_credential_source_id=$2,
+	               codex_credential_source_revision=7,
+	               codex_credential_source_worker_id=$3
+	           WHERE id=$1`, runID, sourceID, owner)
+
+	run, err := e.q.ClaimRun(e.ctx, e.claimParams(owner, caps, false))
+	if err != nil {
+		t.Fatalf("busy owning worker must claim when the idle peer cannot use its host source: %v", err)
+	}
+	if run.ID != runID {
+		t.Fatalf("claimed %v, want %v", run.ID, runID)
+	}
+}
+
+func TestWorkerHostCodexSourcePlacementReadersLiveDB(t *testing.T) {
+	caps := []string{capability.CodexHarnessV1, capability.CodexRuntimeV2, capability.CodexHostLoginV1}
+
+	placement := func(t *testing.T, e interlockLiveDB, runID uuid.UUID) (bool, bool) {
+		t.Helper()
+		now := time.Now()
+		common := store.ListUnplaceableQueuedRunsForEphemeralParams{
+			CrossCheckEvaluatedAt:    pgtype.Timestamptz{Time: now, Valid: true},
+			CrossCheckAffinityCutoff: pgtype.Timestamptz{Time: now.Add(-time.Minute), Valid: true},
+			BackgroundGraceCutoff:    pgtype.Timestamptz{Time: now.Add(-time.Minute), Valid: true},
+			CodexCuratedModels:       codexCuratedModelsSlice(), DockerRepoAllowlist: []uuid.UUID{},
+			EphemeralLease: pgtype.Interval{Valid: true}, MaxPerUser: 1000, MaxRows: 1000,
+		}
+		gaps, err := e.q.ListUnplaceableQueuedRunsForEphemeral(e.ctx, common)
+		if err != nil {
+			t.Fatal(err)
+		}
+		saturated, err := e.q.ListSaturationQueuedRunsForEphemeral(e.ctx, store.ListSaturationQueuedRunsForEphemeralParams{
+			AffinityCutoff: common.AffinityCutoff, StaleRequeueCutoff: common.StaleRequeueCutoff,
+			CrossCheckEvaluatedAt: common.CrossCheckEvaluatedAt, CrossCheckAffinityCutoff: common.CrossCheckAffinityCutoff,
+			BackgroundGraceCutoff: common.BackgroundGraceCutoff, CodexCuratedModels: common.CodexCuratedModels,
+			DockerRepoAllowlist: common.DockerRepoAllowlist, EphemeralLease: common.EphemeralLease,
+			SaturationDelay: pgtype.Interval{Valid: true}, MaxPerUser: common.MaxPerUser, MaxRows: common.MaxRows,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		in := func(rows []store.ListUnplaceableQueuedRunsForEphemeralRow) bool {
+			return slices.ContainsFunc(rows, func(row store.ListUnplaceableQueuedRunsForEphemeralRow) bool { return row.ID == runID })
+		}
+		inSaturation := slices.ContainsFunc(saturated, func(row store.ListSaturationQueuedRunsForEphemeralRow) bool { return row.ID == runID })
+		return in(gaps), inSaturation
+	}
+
+	t.Run("ready owner is the only claimable worker", func(t *testing.T) {
+		e := setupInterlockLiveDB(t)
+		e.exec(t, `UPDATE users SET ephemeral_workers_enabled=true WHERE id=$1`, e.userID)
+		owner := e.seedSpreadWorker(t, caps, 1)
+		e.seedSpreadWorker(t, caps, 1)
+		sourceID := uuid.NewString()
+		e.exec(t, `UPDATE workers SET codex_host_source_id=$2, codex_host_source_revision=7, codex_host_source_ready=true WHERE id=$1`, owner, sourceID)
+		runID := e.seedCodexQueuedRun(t)
+		e.exec(t, `UPDATE runs SET codex_credential_source_kind='worker_host', codex_credential_source_id=$2, codex_credential_source_revision=7, codex_credential_source_worker_id=$3 WHERE id=$1`, runID, sourceID, owner)
+		now := time.Now()
+		count, err := e.q.CountOnlineWorkersClaimableForRun(e.ctx, store.CountOnlineWorkersClaimableForRunParams{
+			RunID: runID, HeartbeatCutoff: pgtype.Timestamptz{Time: now.Add(-time.Minute), Valid: true},
+			AffinityCutoff:        pgtype.Timestamptz{Time: now.Add(-time.Minute), Valid: true},
+			CrossCheckEvaluatedAt: pgtype.Timestamptz{Time: now, Valid: true}, CrossCheckAffinityCutoff: pgtype.Timestamptz{Time: now.Add(-time.Minute), Valid: true},
+			CapabilityAware: true, CodexCuratedModels: codexCuratedModelsSlice(), DockerRepoAllowlist: []uuid.UUID{}, EphemeralLease: pgtype.Interval{Valid: true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count.Claimable != 1 {
+			t.Fatalf("host-bound claimable workers=%d, want only owner", count.Claimable)
+		}
+		gap, _ := placement(t, e, runID)
+		if gap {
+			t.Fatal("ready host-bound owner must not be reported as a capability gap")
+		}
+	})
+
+	t.Run("offline owner is neither provisioning demand nor peer-claimable", func(t *testing.T) {
+		e := setupInterlockLiveDB(t)
+		e.exec(t, `UPDATE users SET ephemeral_workers_enabled=true WHERE id=$1`, e.userID)
+		owner := e.seedSpreadWorker(t, caps, 1)
+		peer := e.seedSpreadWorker(t, caps, 1)
+		sourceID := uuid.NewString()
+		e.exec(t, `UPDATE workers SET codex_host_source_id=$2, codex_host_source_revision=7, codex_host_source_ready=true, status='offline' WHERE id=$1`, owner, sourceID)
+		runID := e.seedCodexQueuedRun(t)
+		e.exec(t, `UPDATE runs SET codex_credential_source_kind='worker_host', codex_credential_source_id=$2, codex_credential_source_revision=7, codex_credential_source_worker_id=$3, status_since=now()-interval '1 hour' WHERE id=$1`, runID, sourceID, owner)
+		gap, saturated := placement(t, e, runID)
+		if gap || saturated {
+			t.Fatalf("offline host owner placement gap=%t saturation=%t, want false false", gap, saturated)
+		}
+		if _, err := e.q.ClaimRun(e.ctx, e.claimParams(peer, caps, false)); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("peer claim error=%v, want no rows", err)
+		}
+	})
+
+	t.Run("busy owner is excluded from saturation despite an idle non-owning peer", func(t *testing.T) {
+		e := setupInterlockLiveDB(t)
+		e.exec(t, `UPDATE users SET ephemeral_workers_enabled=true WHERE id=$1`, e.userID)
+		owner := e.seedSpreadWorker(t, caps, 1)
+		e.seedActiveRunOwnedBy(t, owner)
+		e.seedSpreadWorker(t, caps, 1)
+		sourceID := uuid.NewString()
+		e.exec(t, `UPDATE workers SET codex_host_source_id=$2, codex_host_source_revision=7, codex_host_source_ready=true WHERE id=$1`, owner, sourceID)
+		runID := e.seedCodexQueuedRun(t)
+		e.exec(t, `UPDATE runs SET codex_credential_source_kind='worker_host', codex_credential_source_id=$2, codex_credential_source_revision=7, codex_credential_source_worker_id=$3, status_since=now()-interval '1 hour' WHERE id=$1`, runID, sourceID, owner)
+		gap, saturated := placement(t, e, runID)
+		if gap || saturated {
+			t.Fatalf("busy host owner placement gap=%t saturation=%t, want false false", gap, saturated)
+		}
+		ordinary := e.seedQueuedRun(t, nil, nil)
+		gap, saturated = placement(t, e, ordinary)
+		if gap || saturated {
+			t.Fatalf("ordinary run placement gap=%t saturation=%t, want false false", gap, saturated)
+		}
+	})
+}
+
+func TestGetReadyWorkerCodexHostSourceLiveDB(t *testing.T) {
+	e := setupInterlockLiveDB(t)
+	readySource := uuid.NewString()
+	unreadySource := uuid.NewString()
+	noCapabilitySource := uuid.NewString()
+	ready := e.seedHeartbeatWorker(t, []string{capability.CodexHostLoginV1, capability.CodexHarnessV1, capability.CodexRuntimeV2})
+	secondReady := e.seedHeartbeatWorker(t, []string{capability.CodexHostLoginV1, capability.CodexHarnessV1, capability.CodexRuntimeV2})
+	highID := uuid.MustParse("ffffffff-ffff-4fff-8fff-ffffffffffff")
+	lowID := uuid.MustParse("00000000-0000-4000-8000-000000000001")
+	e.exec(t, `UPDATE workers SET id=$2 WHERE id=$1`, ready, highID)
+	e.exec(t, `UPDATE workers SET id=$2 WHERE id=$1`, secondReady, lowID)
+	ready = highID
+	secondReady = lowID
+	unready := e.seedHeartbeatWorker(t, []string{capability.CodexHostLoginV1, capability.CodexHarnessV1, capability.CodexRuntimeV2})
+	noCapability := e.seedHeartbeatWorker(t, []string{capability.CodexHostLoginV1, capability.CodexHarnessV1})
+	e.exec(t, `UPDATE workers SET codex_host_source_id=$2, codex_host_source_revision=3,
+	           codex_host_source_ready=true WHERE id=$1`, ready, readySource)
+	e.exec(t, `UPDATE workers SET codex_host_source_id=$2, codex_host_source_revision=3,
+	           codex_host_source_ready=true WHERE id=$1`, secondReady, readySource)
+	e.exec(t, `UPDATE workers SET codex_host_source_id=$2, codex_host_source_revision=3,
+	           codex_host_source_ready=false WHERE id=$1`, unready, unreadySource)
+	e.exec(t, `UPDATE workers SET codex_host_source_id=$2, codex_host_source_revision=3,
+	           codex_host_source_ready=true WHERE id=$1`, noCapability, noCapabilitySource)
+	for _, tc := range []struct {
+		name string
+		user uuid.UUID
+		id   string
+		rev  int64
+		want bool
+	}{
+		{"ready own source", e.userID, readySource, 3, true},
+		{"unready source", e.userID, unreadySource, 3, false},
+		{"revision mismatch", e.userID, readySource, 2, false},
+		{"other owner", uuid.New(), readySource, 3, false},
+		{"missing runtime capability", e.userID, noCapabilitySource, 3, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := e.q.GetReadyWorkerCodexHostSource(e.ctx, store.GetReadyWorkerCodexHostSourceParams{
+				UserID: tc.user, SourceID: tc.id, SourceRevision: tc.rev, HeartbeatCutoff: pgtype.Timestamptz{Time: time.Now().Add(-time.Minute), Valid: true},
+			})
+			if tc.want {
+				if err != nil {
+					t.Fatalf("GetReadyWorkerCodexHostSource: %v", err)
+				}
+				if got != secondReady {
+					t.Fatalf("ready worker=%v, want lowest matching worker=%v", got, secondReady)
+				}
+				return
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatalf("GetReadyWorkerCodexHostSource error=%v, want no rows", err)
+			}
+		})
 	}
 }
 

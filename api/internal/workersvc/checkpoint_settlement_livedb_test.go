@@ -477,7 +477,10 @@ func TestBackfillStaleWorkerFailLiveDB(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			f := newSupersedeFix(t)
-			w := f.e.seedWorker(t, nil) // never heartbeated: stale
+			w := f.e.seedWorker(t, nil)
+			// seedWorker normally makes a live worker. This case exercises the
+			// separate NULL-heartbeat stale-worker predicate.
+			f.e.exec(t, `UPDATE workers SET last_heartbeat_at = NULL WHERE id = $1`, w)
 			runID, ref := f.seedIssueRun(t, "running", w, 1)
 			f.e.exec(t, `UPDATE runs SET requeue_count = 9999 WHERE id = $1`, runID)
 			if withHold {

@@ -14,6 +14,12 @@ const bindings = [
   { auth_mode: "api_key", access_token: "test-key", capability: "test-cap" },
   { auth_mode: "subscription", access_token: "test-subscription", capability: "test-cap", generation: 7, chatgpt_account_id: "account-test", chatgpt_plan_type: null },
 ];
+const workerHostBinding = {
+  auth_mode: "subscription",
+  codex_credential_source: {
+    kind: "worker_host", source_id: "11111111-1111-4111-8111-111111111111", source_revision: 1,
+  },
+};
 const homeRoot = path.resolve("../.uzi/scratch");
 before(async () => {
   await fs.mkdir(homeRoot, { recursive: true });
@@ -27,6 +33,21 @@ for (const pass of ["intent", "plan"] as const) {
   const text = pass === "intent" ? "Adds reports." : JSON.stringify({ summary: "Adds reports.", deltas: [{ kind: "added", text: "Reports" }] });
 
   describe(`${pass}: Codex selection`, () => {
+    it("worker-host source skips without a Claude or Codex credential path", async () => {
+      let claudeCalls = 0;
+      let factoryCalls = 0;
+      const warnings: Record<string, unknown>[] = [];
+      const queryFn = (() => { claudeCalls++; throw new Error("unexpected Claude"); }) as unknown as SdkQueryFn;
+      const factory = (async () => { factoryCalls++; throw new Error("unexpected Codex"); }) as CodexAdviceHarnessFactory;
+      const r = new SummaryRunner({ ...nullLogger(), warn: (_message, fields) => void warnings.push(fields ?? {}) }, {
+        homeRoot, queryFn, codexAdviceHarnessFactory: factory,
+      });
+      assert.equal(await run(r, { ...base, token: "server-anthropic", claim: { run_id: "run-summary", secrets: { codex: workerHostBinding } } }), null);
+      assert.equal(claudeCalls, 0);
+      assert.equal(factoryCalls, 0);
+      assert.deepEqual(warnings, [{ reason: "worker_host_credential" }]);
+    });
+
     for (const binding of bindings) {
       it(`${binding.auth_mode}: pins model/effort, denies refresh, and preserves prompts/output`, async () => {
         let builds = 0;

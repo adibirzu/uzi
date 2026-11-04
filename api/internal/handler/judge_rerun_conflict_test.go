@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	mw "github.com/vtmocanu/uzi/api/internal/middleware"
 	"github.com/vtmocanu/uzi/api/internal/store"
@@ -185,6 +186,31 @@ func TestRerunJudgeConflictMessages(t *testing.T) {
 				"so the re-fetch-and-converge path is unreachable", got)
 		}
 	})
+}
+
+func TestRerunJudgeHostCodexDerivedRunUnsupported(t *testing.T) {
+	ds, runID, _ := oneRecStore()
+	ds.run.Harness = string(workersvc.HarnessClaude)
+	ds.run.CodexCredentialSourceKind = pgtype.Text{String: "worker_host", Valid: true}
+	st := &rerunStore{dispStore: ds}
+	h := newRunsHandler(t, st)
+	h.wsvc.SetSettings(judgeSwitch{enabled: true})
+
+	rec := httptest.NewRecorder()
+	h.RerunJudge(rec, rerunReq(store.User{ID: st.ownerID}, runID))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["reason"] != "host_codex_derived_run_unsupported" {
+		t.Fatalf("reason = %v, want host_codex_derived_run_unsupported", body["reason"])
+	}
+	if st.created != 0 {
+		t.Fatalf("CreateJudgeRun ran %d times despite host-derived target", st.created)
+	}
 }
 
 // errorMessage reads httpx.Error's {"error": …} envelope. Decoding into a map rather than

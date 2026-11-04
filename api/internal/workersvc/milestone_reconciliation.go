@@ -197,6 +197,11 @@ func reconciliationSnapshot(r store.Run) ([]byte, error) {
 	} {
 		snapshot[key] = json.RawMessage(jsonOrNull(raw))
 	}
+	// Placement metadata cannot affect reconciliation.
+	delete(snapshot, "codex_credential_source_kind")
+	delete(snapshot, "codex_credential_source_id")
+	delete(snapshot, "codex_credential_source_revision")
+	delete(snapshot, "codex_credential_source_worker_id")
 	return json.Marshal(snapshot)
 }
 

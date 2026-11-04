@@ -6,7 +6,7 @@ audience: user
 
 # Worker setup
 
-A **worker** is the `uzi-agent` container: it connects to your uzi server, claims your queued runs, and drives them with the Claude Agent SDK. One worker per user is normal; it runs anywhere that can reach the server outbound (laptop, VM, CI runner), since it never needs an inbound port.
+A **worker** is the `uzi-agent` container: it connects to your uzi server, claims your queued runs, and drives them with the selected Claude or Codex harness. One worker per user is normal; it runs anywhere that can reach the server outbound (laptop, VM, CI runner), since it never needs an inbound port.
 
 On a k8s deployment where an admin has turned hosting on, you can skip this whole page: provision a worker from **Settings → Workers** instead, on the **Add a worker** tab, and the cluster runs the container for you. See [Hosted workers](./hosted-workers.md).
 
@@ -43,6 +43,11 @@ The worker runs agents against your own Anthropic credential, which must already
 - Deleting the token a worker is bound to does not break the worker: it silently falls back to your default from the next claim.
 
 ## 3. Run the worker
+
+For the fork-only experimental host-held Codex login mode, see [Host-held login
+(fork, experimental)](./codex-credentials.md#host-held-login-fork-experimental).
+It currently validates a dedicated protected file-store `CODEX_HOME` on this
+worker host; never mount or point it at an everyday `~/.codex` directory.
 
 **Bundled compose profile** (the common case): set `UZI_WORKER_TOKEN=<join token>` in your `.env` (see [configuration.md](./configuration.md)), then:
 

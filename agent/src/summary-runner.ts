@@ -48,6 +48,13 @@ const SUMMARY_MODEL_TIMEOUT_MS = summaryModelTimeoutMs(process.env);
 // Issue #2833 M1: private intent/plan pins, independent of the delivery editor model.
 const CODEX_INTENT_PLAN_MODEL = "gpt-6-luna";
 const CODEX_INTENT_PLAN_EFFORT = "low";
+const WORKER_HOST_SUMMARY_REASON = "worker_host_credential";
+
+class WorkerHostSummaryDisabledError extends Error {
+  constructor() {
+    super(WORKER_HOST_SUMMARY_REASON);
+  }
+}
 
 /** PRD #1798 M5: the Claude model the editor pass runs on when the claim carries no usable
  *  `summary_model`. The api resolves `summary_model` (user value, else the instance setting,
@@ -277,6 +284,7 @@ export class SummaryRunner {
       "the claim's codex block is invalid": "invalid_codex",
       "Codex claim but no Codex advice-harness factory is wired": "missing_factory",
       "the claim carries no Anthropic token": "missing_credential",
+      "the claim's worker-host Codex source cannot generate summaries": "worker_host_credential",
       "the model pass failed": "pass_failed",
       "unparseable output": "unparseable",
       "the output had no usable summary": "missing_summary",
@@ -340,7 +348,7 @@ export class SummaryRunner {
    *  selected harness has no credential or no factory. */
   private deliveryHarness(
     claim: DeliverySummaryClaimView,
-    fail: (reason: "Codex claim but no Codex advice-harness factory is wired" | "the claim carries no Anthropic token") => null,
+    fail: (reason: "Codex claim but no Codex advice-harness factory is wired" | "the claim carries no Anthropic token" | "the claim's worker-host Codex source cannot generate summaries") => null,
     claimGeneration?: number,
   ): Pick<ReadOnlyModelPassOpts, "token" | "model" | "codex"> | null {
     const selection = selectCodexBinding({ codex: claim.secrets.codex });
@@ -351,6 +359,7 @@ export class SummaryRunner {
         codex: { runId: claim.run_id, claimGeneration: claimGeneration ?? claim.claim_generation, binding: selection.binding, buildHarness: this.codexAdviceHarnessFactory },
       };
     }
+    if (selection.kind === "worker_host") return fail("the claim's worker-host Codex source cannot generate summaries");
     const token = claim.secrets.anthropic_oauth_token?.trim();
     if (!token) return fail("the claim carries no Anthropic token");
     const model = claim.summary_model?.trim() ?? "";
@@ -366,7 +375,9 @@ export class SummaryRunner {
     try {
       text = await this.runModel("intent", input, prompt);
     } catch (err) {
-      this.log.warn("intent summary generation failed", { error: errMessage(err) });
+      this.log.warn("intent summary generation failed", err instanceof WorkerHostSummaryDisabledError
+        ? { reason: WORKER_HOST_SUMMARY_REASON }
+        : { error: errMessage(err) });
       return null;
     }
     const summary = clipBytes(clip(text.trim(), MAX_SUMMARY_CHARS), MAX_SUMMARY_BYTES);
@@ -387,7 +398,9 @@ export class SummaryRunner {
     try {
       text = await this.runModel("plan", input, prompt);
     } catch (err) {
-      this.log.warn("plan summary generation failed", { error: errMessage(err) });
+      this.log.warn("plan summary generation failed", err instanceof WorkerHostSummaryDisabledError
+        ? { reason: WORKER_HOST_SUMMARY_REASON }
+        : { error: errMessage(err) });
       return null;
     }
     return this.parsePlanSummary(text);
@@ -443,6 +456,8 @@ export class SummaryRunner {
             refresh: "deny",
           },
         };
+      } else if (selection.kind === "worker_host") {
+        throw new WorkerHostSummaryDisabledError();
       } else {
         harness = { token: input.token, model: input.model };
       }

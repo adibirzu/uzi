@@ -77,8 +77,10 @@ func (e interlockLiveDB) seedWorker(t *testing.T, protocolCaps []string) uuid.UU
 	if protocolCaps == nil {
 		protocolCaps = []string{}
 	}
-	e.exec(t, `INSERT INTO workers (id, user_id, name, token_hash, status, protocol_capabilities)
-	           VALUES ($1, $2, $3, $4, 'online', $5)`,
+	// ClaimRun's normal readiness gate requires a fresh heartbeat. Keep this
+	// baseline fixture genuinely claimable; stale-worker tests set it explicitly.
+	e.exec(t, `INSERT INTO workers (id, user_id, name, token_hash, status, protocol_capabilities, last_heartbeat_at)
+	           VALUES ($1, $2, $3, $4, 'online', $5, now())`,
 		id, e.userID, "w-"+id.String()[:8], id[:], protocolCaps)
 	return id
 }

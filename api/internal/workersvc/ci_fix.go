@@ -180,6 +180,17 @@ func (s *Service) createCIFixRun(ctx context.Context, userID, repoID uuid.UUID, 
 	if err := s.guardDefaultBranch(ctx, row); err != nil {
 		return store.Run{}, err
 	}
+	// A CI fix is derived work for the failed branch. Worker-host Codex credentials
+	// belong solely to their bound worker, so never re-resolve this as a server-held
+	// credential. This read is repeated in the create transaction below to close the
+	// branch-link race.
+	hostBound, err := s.q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}})
+	if err != nil {
+		return store.Run{}, err
+	}
+	if hostBound {
+		return store.Run{}, ErrHostCodexDerivedRunUnsupported
+	}
 
 	snapJSON, err := json.Marshal(snapshot)
 	if err != nil {
@@ -191,6 +202,13 @@ func (s *Service) createCIFixRun(ctx context.Context, userID, repoID uuid.UUID, 
 	// PRD #1429 M2: CI-fix has no reliable target run, so it uses IMPLICIT D11 (nil explicit) — the
 	// resolve + freeze commit atomically with the INSERT.
 	run, err := s.createRunResolved(ctx, userID, nil /*explicit: implicit D11*/, func(q Store, resolved resolvedHarness) (store.Run, error) {
+		hostBound, err := q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}})
+		if err != nil {
+			return store.Run{}, err
+		}
+		if hostBound {
+			return store.Run{}, ErrHostCodexDerivedRunUnsupported
+		}
 		// Cross-kind same-branch exclusion (PRD #6, issue #1626), inside the create transaction
 		// and after the run-branch lock, so it serializes against an issue / mr_rework create on
 		// the same ref (they take the same (repo, ref) key; see store.RunBranchLockClass). The

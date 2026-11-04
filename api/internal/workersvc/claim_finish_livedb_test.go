@@ -2,6 +2,7 @@ package workersvc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -205,6 +206,80 @@ func TestClaimObservedCaseReplayParksLiveDB(t *testing.T) {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			t.Fatalf("second ParkRunCodexAccountUnavailable as %s at gen 2: err=%v, want pgx.ErrNoRows", name, err)
 		}
+	}
+}
+
+// TestHostCodexRealClaimPathEndToEndLiveDB drives Service.Claim (rather than the
+// ClaimRun SQL seam) for a worker-host binding. The claim must remain metadata-only
+// and the operation authority must be fenced to its owner and generation.
+func TestHostCodexRealClaimPathEndToEndLiveDB(t *testing.T) {
+	e := setupInterlockLiveDB(t)
+	env := codexTestEnv{ctx: e.ctx, pool: e.pool, q: e.q}
+	env.box = newBox(t)
+	env.exec = func(sql string, args ...any) { e.exec(t, sql, args...) }
+	resealBotPAT(t, env, e.userID)
+	caps := []string{capability.CodexHarnessV1, capability.CodexRuntimeV2, capability.CodexHostLoginV1}
+	ownerID := e.seedWorker(t, caps)
+	nonOwnerID := e.seedWorker(t, caps)
+	sourceID := uuid.New()
+	e.exec(t, `UPDATE workers SET codex_host_source_id=$2, codex_host_source_revision=7, codex_host_source_ready=true WHERE id=$1`, ownerID, sourceID.String())
+	runID := e.seedCodexQueuedRun(t)
+	e.exec(t, `UPDATE runs SET codex_credential_source_kind='worker_host', codex_credential_source_id=$2, codex_credential_source_revision=7, codex_credential_source_worker_id=$3 WHERE id=$1`, runID, sourceID.String(), ownerID)
+
+	svc := New(e.q, env.box, testParams())
+	svc.SetTxBeginner(e.pool)
+	owner := wkrRow(t, env, ownerID)
+	nonOwner := wkrRow(t, env, nonOwnerID)
+	if idle, err := svc.Claim(e.ctx, nonOwner, nil); err != nil || idle != nil {
+		t.Fatalf("non-owner Claim = payload %v, err %v; want idle", idle != nil, err)
+	}
+	if run := mustRun(t, env, runID); run.Status != "queued" || run.ClaimGeneration != 0 {
+		t.Fatalf("non-owner Claim changed run to status %q generation %d; want queued generation 0", run.Status, run.ClaimGeneration)
+	}
+	payload, err := svc.Claim(e.ctx, owner, nil)
+	if err != nil || payload == nil || payload.Secrets.Codex == nil {
+		run := mustRun(t, env, runID)
+		t.Fatalf("owner Claim = payload %v, err %v; run status %q generation %d failure %q", payload != nil, err, run.Status, run.ClaimGeneration, run.FailureReason.String)
+	}
+	got, err := json.Marshal(payload.Secrets.Codex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf(`{"auth_mode":"subscription","codex_credential_source":{"kind":"worker_host","source_id":%q,"source_revision":7}}`, sourceID.String())
+	if string(got) != want {
+		t.Fatalf("host Codex secrets = %s, want %s", got, want)
+	}
+	run := mustRun(t, env, runID)
+	if run.Status != "claimed" || run.ClaimGeneration != 1 || run.HoldReason.Valid {
+		t.Fatalf("run = status %q generation %d hold %v, want claimed generation 1 no hold", run.Status, run.ClaimGeneration, run.HoldReason)
+	}
+	// Re-run the real transactional claim finisher over the metadata-only payload. A
+	// worker-host source has no minted capability and no server-backed Codex alias,
+	// so both host exceptions in finishRunClaimTx are load-bearing.
+	settled, err := svc.finishRunClaim(e.ctx, run, payload, nil,
+		claimRecoveryIdentity{workerID: ownerID, recoveryCapable: true})
+	if err != nil || settled != payload {
+		t.Fatalf("host finishRunClaim = payload %v, err %v; want original payload", settled != nil, err)
+	}
+	for _, tc := range []struct {
+		name       string
+		workerID   uuid.UUID
+		generation int64
+		wantRow    bool
+	}{
+		{"owner generation", ownerID, 1, true},
+		{"non-owner", nonOwnerID, 1, false},
+		{"wrong generation", ownerID, 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := e.q.GetCodexOperationAuthority(e.ctx, store.GetCodexOperationAuthorityParams{RunID: runID, UserID: e.userID, WorkerID: tc.workerID, ClaimGeneration: tc.generation})
+			if tc.wantRow && err != nil {
+				t.Fatalf("authority: %v", err)
+			}
+			if !tc.wantRow && !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatalf("authority error = %v, want no rows", err)
+			}
+		})
 	}
 }
 

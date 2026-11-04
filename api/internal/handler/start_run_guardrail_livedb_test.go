@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -138,7 +139,7 @@ func newStartRunGuardFixture(ctx context.Context, t *testing.T) startRunGuardFix
 	// SetRepoGuard (the M5 seam under test) — no fakes on the guard path.
 	svc := newZeroWaitForgeService(q, box)
 	pcheck := privcheck.NewService(q, svc)
-	wsvc := workersvc.New(q, box, workersvc.Params{CustodyHoldLimit: defaultCustodyLimit()})
+	wsvc := workersvc.New(q, box, workersvc.Params{CustodyHoldLimit: defaultCustodyLimit(), WorkerHeartbeatStale: time.Minute})
 	wsvc.SetForges(svc)
 	wsvc.SetRepoGuard(pcheck)
 	// PRD #1429 M1/M2: a Codex resolution's binding freeze requires the atomic transaction
