@@ -3,7 +3,6 @@ package workersvc
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -93,15 +92,14 @@ func TestCreateCIFixRunRefusesBranchInUse(t *testing.T) {
 	}
 }
 
-func TestCreateCIFixRunRefusesWorkerHostCodexParent(t *testing.T) {
+func TestCreateCIFixRunInheritsWorkerHostCodexParent(t *testing.T) {
 	fs := &fakeStore{hostCodexRunForBranch: true}
 	svc := New(fs, newBox(t), testParams())
-	_, err := svc.CreateCIFixRun(context.Background(), uuid.New(), uuid.New(), "agent/issue-9", "t", "d", sampleSnapshot(), nil)
-	if !errors.Is(err, ErrHostCodexDerivedRunUnsupported) {
-		t.Fatalf("CreateCIFixRun error = %v, want ErrHostCodexDerivedRunUnsupported", err)
+	if _, err := svc.CreateCIFixRun(context.Background(), uuid.New(), uuid.New(), "agent/issue-9", "t", "d", sampleSnapshot(), nil); err != nil {
+		t.Fatalf("CreateCIFixRun: %v", err)
 	}
-	if fs.ciFixRunParams != nil {
-		t.Fatal("CreateCIFixRun inserted despite worker-host parent")
+	if fs.ciFixRunParams == nil {
+		t.Fatal("CreateCIFixRun did not insert for a worker-host parent")
 	}
 }
 

@@ -273,9 +273,7 @@ func (s *Service) CreateTaskReviewRun(ctx context.Context, userID, repoID, targe
 	if err != nil {
 		return store.Run{}, err
 	}
-	if err := rejectHostDerivedRun(target); err != nil {
-		return store.Run{}, err
-	}
+	ctx = inheritHostCodexSource(ctx, target)
 	id := uuid.New()
 	run, err := s.createRunResolved(ctx, userID, &targetHarness, func(q Store, resolved resolvedHarness) (store.Run, error) {
 		return q.CreateTaskReviewRun(ctx, store.CreateTaskReviewRunParams{
@@ -324,9 +322,7 @@ func (s *Service) CreateThenFixRun(ctx context.Context, userID, repoID, original
 	if err != nil {
 		return store.Run{}, err
 	}
-	if err := rejectHostDerivedRun(original); err != nil {
-		return store.Run{}, err
-	}
+	ctx = inheritHostCodexSource(ctx, original)
 	id := uuid.New()
 	// A then-fix INHERITS the original task's persisted budget verbatim (issue #785):
 	// budgetWall / budgetIters are the original run's stored budget_wall_seconds /

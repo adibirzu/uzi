@@ -206,8 +206,11 @@ func automaticHarnessEligible(res resolvedHarness, explicit *Harness, origin har
 // HostCodexSource is deliberately only routing metadata.  The API never receives
 // a path, account id, token, refresh token, or sealed login for this source.
 type HostCodexSource struct {
-	ID        string
-	Revision  int64
+	ID       string
+	Revision int64
+	// WorkerID pins derived work to its parent's exact host. It is optional only
+	// for a user-requested source; inherited sources never re-place by tuple.
+	WorkerID  uuid.UUID
 	Automatic bool
 }
 
@@ -229,6 +232,20 @@ func rejectHostDerivedRun(run store.Run) error {
 		return ErrHostCodexDerivedRunUnsupported
 	}
 	return nil
+}
+
+// inheritHostCodexSource carries only persisted routing metadata into the atomic
+// create seam. The seam revalidates the exact worker/source/revision in its own
+// transaction before inserting and freezing the child binding.
+func inheritHostCodexSource(ctx context.Context, run store.Run) context.Context {
+	if !run.CodexCredentialSourceKind.Valid || run.CodexCredentialSourceKind.String != "worker_host" ||
+		!run.CodexCredentialSourceID.Valid || !run.CodexCredentialSourceRevision.Valid || !run.CodexCredentialSourceWorkerID.Valid {
+		return ctx
+	}
+	return WithHostCodexSource(ctx, HostCodexSource{
+		ID: run.CodexCredentialSourceID.String, Revision: run.CodexCredentialSourceRevision.Int64,
+		WorkerID: uuid.UUID(run.CodexCredentialSourceWorkerID.Bytes),
+	})
 }
 
 // harnessResolverStore is the narrow C1-frozen read surface the store-backed resolver
@@ -720,7 +737,11 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 				return store.Run{}, resolvedHarness{}, errHostCodexSourceAmbiguous
 			}
 		} else {
-			hostWorkerID, err = qtx.GetReadyWorkerCodexHostSource(ctx, store.GetReadyWorkerCodexHostSourceParams{UserID: userID, SourceID: hostSource.ID, SourceRevision: hostSource.Revision, HeartbeatCutoff: heartbeatCutoff})
+			if hostSource.WorkerID != uuid.Nil {
+				hostWorkerID, err = qtx.GetReadyWorkerCodexHostSourceByID(ctx, store.GetReadyWorkerCodexHostSourceByIDParams{ID: hostSource.WorkerID, UserID: userID, SourceID: hostSource.ID, SourceRevision: hostSource.Revision, HeartbeatCutoff: heartbeatCutoff})
+			} else {
+				hostWorkerID, err = qtx.GetReadyWorkerCodexHostSource(ctx, store.GetReadyWorkerCodexHostSourceParams{UserID: userID, SourceID: hostSource.ID, SourceRevision: hostSource.Revision, HeartbeatCutoff: heartbeatCutoff})
+			}
 			if errors.Is(err, pgx.ErrNoRows) {
 				return store.Run{}, resolvedHarness{}, errHostCodexSourceUnavailable
 			}

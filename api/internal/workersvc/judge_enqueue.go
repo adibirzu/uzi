@@ -283,9 +283,7 @@ func (s *Service) maybeEnqueueJudge(ctx context.Context, run store.Run) {
 	// the other provider, and an inherited-but-unusable harness fails closed
 	// (ErrNoCredentialForHarness) instead of inserting a stranded row.
 	judgeHarness := Harness(run.Harness)
-	if rejectHostDerivedRun(run) != nil {
-		return
-	}
+	ctx = inheritHostCodexSource(ctx, run)
 	judge, err := s.createRunResolved(ctx, run.UserID, &judgeHarness, func(q Store, resolved resolvedHarness) (store.Run, error) {
 		return q.CreateJudgeRun(ctx, store.CreateJudgeRunParams{
 			UserID:           run.UserID,

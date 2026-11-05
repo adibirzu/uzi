@@ -1842,6 +1842,14 @@ func (f *fakeStore) HasWorkerHostCodexRunForBranch(context.Context, store.HasWor
 	return f.hostCodexRunForBranch, nil
 }
 
+func (f *fakeStore) GetWorkerHostCodexRunForBranch(context.Context, store.GetWorkerHostCodexRunForBranchParams) (store.Run, error) {
+	if f.hostCodexRunForBranch {
+		worker := uuid.New()
+		return store.Run{CodexCredentialSourceKind: pgtype.Text{String: "worker_host", Valid: true}, CodexCredentialSourceID: pgtype.Text{String: uuid.NewString(), Valid: true}, CodexCredentialSourceRevision: pgtype.Int8{Int64: 1, Valid: true}, CodexCredentialSourceWorkerID: pgtype.UUID{Bytes: worker, Valid: true}}, nil
+	}
+	return store.Run{}, pgx.ErrNoRows
+}
+
 // LockRunBranch is a no-op: the in-memory fake has no transaction to serialize (issue #1626).
 func (f *fakeStore) LockRunBranch(context.Context, uuid.UUID, string) error { return nil }
 func (f *fakeStore) CreateWorker(_ context.Context, arg store.CreateWorkerParams) (store.Worker, error) {

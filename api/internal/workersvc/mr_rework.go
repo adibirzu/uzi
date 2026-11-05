@@ -194,9 +194,7 @@ func (s *Service) createMRReworkRun(ctx context.Context, userID, repoID uuid.UUI
 		return store.Run{}, fmt.Errorf("load mr_rework source run: %w", err)
 	}
 	sourceHarness := Harness(sourceRun.Harness)
-	if err := rejectHostDerivedRun(sourceRun); err != nil {
-		return store.Run{}, err
-	}
+	ctx = inheritHostCodexSource(ctx, sourceRun)
 
 	run, err := s.createRunResolved(ctx, userID, &sourceHarness, func(q Store, resolved resolvedHarness) (store.Run, error) {
 		// Issue #1626: serialize against an issue-run create on the same agent branch. The

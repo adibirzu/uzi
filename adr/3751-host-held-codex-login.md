@@ -78,10 +78,13 @@ between-heartbeat window: a source can become unready just after its report and
 one already-admissible run can still be claimed, then fails closed in the
 executor rather than receiving a server-credential fallback.
 
-Derived runs ultimately inherit the same bound worker, source ID, and revision.
-Until that handoff is implemented, M1 rejects every child or successor of a
-host-bound run with a typed unsupported-derived-run reason before credential
-resolution; it never substitutes a server Codex or Claude credential.
+F4 is implemented for MR rework, CI fix, judge (automatic and rerun), task
+review, and then-fix: each child inherits the parent's exact worker, source ID,
+and source revision in the create transaction. The exact worker/source revision
+is revalidated before commit; an unavailable, replaced, or stale source returns
+the typed host-source-unavailable refusal and never falls back to a server
+credential. Plan/code cross-check remain typed refusals because they require an
+opposite-harness server credential rather than the parent's execution lane.
 
 API-host meters, source-aware parking/cooldown admission, and native
 Mini/UID-split deployment are separate milestones. The M1 bridge does not call

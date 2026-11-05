@@ -223,6 +223,21 @@ WHERE user_id = @user_id
 ORDER BY id
 LIMIT 1;
 
+-- name: GetReadyWorkerCodexHostSourceByID :one
+-- Derived worker-host runs retain their parent's exact worker binding. A
+-- same-user reporter with matching source metadata is not interchangeable.
+SELECT id FROM workers
+WHERE id = @id
+  AND user_id = @user_id
+  AND status = 'online'
+  AND last_heartbeat_at >= @heartbeat_cutoff
+  AND codex_host_source_ready
+  AND codex_host_source_id = @source_id::text
+  AND codex_host_source_revision = @source_revision::bigint
+  AND 'codex_host_login_v1' = ANY(protocol_capabilities)
+  AND 'codex_harness_v1' = ANY(protocol_capabilities)
+  AND 'codex_runtime_v2' = ANY(protocol_capabilities);
+
 -- name: ListReadyWorkerCodexHostSources :many
 SELECT id, codex_host_source_id, codex_host_source_revision FROM workers
 WHERE user_id = @user_id

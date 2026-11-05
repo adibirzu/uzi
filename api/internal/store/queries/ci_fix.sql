@@ -111,6 +111,16 @@ SELECT EXISTS (
       AND codex_credential_source_kind = 'worker_host'
 ) AS host_bound;
 
+-- name: GetWorkerHostCodexRunForBranch :one
+-- A CI fix derives from the failed branch's host-bound run. Return its frozen
+-- routing tuple so the shared atomic creation seam can validate and retain it.
+SELECT * FROM runs
+WHERE repo_id = @repo_id::uuid
+  AND branch = @branch
+  AND codex_credential_source_kind = 'worker_host'
+ORDER BY created_at DESC
+LIMIT 1;
+
 -- name: FindCIFixStampTarget :one
 -- Verification stamp-target selection (PRD #6). The ci_fix run whose fix branch is
 -- @branch, not yet stamped, whose snapshotted (failing) pipeline id is BELOW the
