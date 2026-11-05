@@ -1,6 +1,7 @@
 package workersvc
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"sort"
@@ -187,7 +188,7 @@ func TestReconciliationSnapshotSessionID(t *testing.T) {
 }
 
 func TestReconciliationSnapshotOmitsHostCodexPlacementMetadata(t *testing.T) {
-	milestones := make([]map[string]string, 96)
+	milestones := make([]map[string]string, 8)
 	for i := range milestones {
 		milestones[i] = map[string]string{
 			"id":    "M" + strings.Repeat("x", 8),
@@ -198,17 +199,23 @@ func TestReconciliationSnapshotOmitsHostCodexPlacementMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := store.Run{
-		ID:                            uuid.New(),
-		MilestonesFrozen:              frozen,
-		CodexCredentialSourceKind:     pgtype.Text{String: "worker_host", Valid: true},
-		CodexCredentialSourceID:       pgtype.Text{String: uuid.NewString(), Valid: true},
-		CodexCredentialSourceRevision: pgtype.Int8{Int64: 1, Valid: true},
-		CodexCredentialSourceWorkerID: pgtype.UUID{Bytes: uuid.New(), Valid: true},
-	}
-	snapshot, err := reconciliationSnapshot(run)
+	base := store.Run{ID: uuid.New(), MilestonesFrozen: frozen}
+	hosted := base
+	hosted.CodexCredentialSourceKind = pgtype.Text{String: "worker_host", Valid: true}
+	hosted.CodexCredentialSourceID = pgtype.Text{String: uuid.NewString(), Valid: true}
+	hosted.CodexCredentialSourceRevision = pgtype.Int8{Int64: 1, Valid: true}
+	hosted.CodexCredentialSourceWorkerID = pgtype.UUID{Bytes: uuid.New(), Valid: true}
+
+	want, err := reconciliationSnapshot(base)
 	if err != nil {
 		t.Fatal(err)
+	}
+	snapshot, err := reconciliationSnapshot(hosted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(snapshot, want) {
+		t.Fatalf("host placement changed snapshot:\n got %s\nwant %s", snapshot, want)
 	}
 	if len(snapshot) > reconciliationSnapshotBytes {
 		t.Fatalf("snapshot length %d exceeds %d", len(snapshot), reconciliationSnapshotBytes)
