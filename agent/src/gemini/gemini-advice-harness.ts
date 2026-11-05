@@ -8,7 +8,7 @@
  * event when present; otherwise we concatenate assistant delta strings. Other
  * events (including user/tool echoes) are deliberately ignored.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -62,6 +62,13 @@ function finalText(value: Record<string, unknown>): string | undefined {
   return isFinalEvent(value) && typeof value.result === "string" ? value.result : undefined;
 }
 
+function finalFailure(value: Record<string, unknown>): string | undefined {
+  if (!isFinalEvent(value) || value.is_error !== true) return undefined;
+  if (typeof value.subtype === "string") return value.subtype;
+  if (typeof value.error === "string") return value.error;
+  return "Gemini reported an error result";
+}
+
 function terminal(outcome: "success" | "failed", subtype: string, errors: readonly string[]): HarnessTerminal {
   return { outcome, subtype, errors, metrics: { cost: { kind: "unreported" } } };
 }
@@ -81,24 +88,19 @@ export class GeminiAdviceHarness implements AdviceHarness {
     }
     const model = request.model ?? modelFromEnv(this.env);
     if (!MODEL.test(model)) throw new GeminiAdviceError("model", "Gemini model must be a non-empty model identifier");
+    // agy's native JSON-schema enforcement has not been measured for this isolated
+    // advice lane. Refuse rather than pretending an object parse enforces the schema.
+    if (request.output.kind !== "text") {
+      throw new GeminiAdviceError("protocol", `Gemini advice does not support output {kind:"${request.output.kind}"}: native outputSchema enforcement is unmeasured (fail-closed)`);
+    }
     const cwd = await mkdtemp(join(tmpdir(), "uzi-gemini-advice-"));
     try {
       const args = ["--print=", "--input-format", "stream-json", "--output-format", "stream-json", `--model=${model}`, "--effort", effort(request.effort), "--mode", "plan", "--disable-slash-commands", "--sandbox"];
-      if (request.output.kind === "json") {
-        const schemaPath = join(cwd, "output-schema.json");
-        await writeFile(schemaPath, JSON.stringify(request.output.schema), { mode: 0o600 });
-        args.push("--json-schema", schemaPath);
-      }
       // This replacement env is intentionally a closed allowlist. Do not spread process.env.
       const childEnv: NodeJS.ProcessEnv = { HOME: source.home };
       for (const name of ["PATH", "LANG", "TZ", "TMPDIR"] as const) if (this.env[name] !== undefined) childEnv[name] = this.env[name];
       const result = await this.execute(source.cli, args, cwd, childEnv, request);
       if (result.end.kind !== "terminal") throw new GeminiAdviceError("protocol", "Gemini advice ended without a terminal result");
-      if (request.output.kind === "json") {
-        let parsed: unknown;
-        try { parsed = JSON.parse(result.text); } catch { throw new GeminiAdviceError("protocol", "Gemini JSON advice result was not an object"); }
-        if (!record(parsed)) throw new GeminiAdviceError("protocol", "Gemini JSON advice result was not an object");
-      }
       policy.onTerminal(result.end.terminal, { isError: result.end.terminal.outcome === "failed", latest: undefined });
       return result;
     } finally {
@@ -119,17 +121,20 @@ export class GeminiAdviceHarness implements AdviceHarness {
       let seenJson = false;
       let final = false;
       let finalResult: string | undefined;
+      let finalError: string | undefined;
       const deltas: string[] = [];
       let settled = false;
       let stopping = false;
       let pendingError: GeminiAdviceError | undefined;
       let timer: NodeJS.Timeout | undefined;
       let killTimer: NodeJS.Timeout | undefined;
+      let settleTimer: NodeJS.Timeout | undefined;
       const finish = (value: AdviceResult | Error): void => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
         if (killTimer) clearTimeout(killTimer);
+        if (settleTimer) clearTimeout(settleTimer);
         request.signal.removeEventListener("abort", abort);
         value instanceof Error ? reject(value) : resolve(value);
       };
@@ -139,7 +144,20 @@ export class GeminiAdviceHarness implements AdviceHarness {
         pendingError = new GeminiAdviceError(category, message);
         child.stdin.end();
         child.kill("SIGTERM");
-        killTimer = setTimeout(() => child.kill("SIGKILL"), request.graceMs ?? 500);
+        const graceMs = request.graceMs ?? 500;
+        killTimer = setTimeout(() => {
+          child.kill("SIGKILL");
+          // `close` waits for inherited stdio to close. A descendant can retain those
+          // pipes after the exact child PID is killed, so force settlement one grace
+          // later without ever signalling an unowned process.
+          settleTimer = setTimeout(() => {
+            child.stdin.destroy();
+            child.stdout.destroy();
+            child.stderr.destroy();
+            finish(pendingError!);
+          }, graceMs);
+          settleTimer.unref?.();
+        }, graceMs);
         killTimer.unref?.();
       };
       const abort = (): void => stop("aborted", `${request.label} Gemini model call aborted`);
@@ -159,6 +177,8 @@ export class GeminiAdviceHarness implements AdviceHarness {
         final ||= isFinalEvent(event);
         const result = finalText(event);
         if (result !== undefined) finalResult = result;
+        const failure = finalFailure(event);
+        if (failure !== undefined) finalError = failure;
         const delta = assistantDelta(event);
         if (delta !== undefined) deltas.push(delta);
       };
@@ -188,11 +208,13 @@ export class GeminiAdviceHarness implements AdviceHarness {
           try { accept(stdout); } catch { return finish(new GeminiAdviceError("protocol", "Gemini emitted invalid stream-json")); }
         }
         if (pendingError) return finish(pendingError);
-        const auth = AUTH_DIAGNOSTIC.test(`${stderr}\n${diagnostic}`);
+        const auth = (!final || code !== 0) && AUTH_DIAGNOSTIC.test(`${stderr}\n${diagnostic}`);
         if (auth) return finish({ text: finalResult ?? deltas.join(""), end: { kind: "terminal", terminal: terminal("failed", "authentication", ["Gemini host login needs re-login"]) } });
         if (!final) return finish(new GeminiAdviceError("protocol", `Gemini CLI ended without a final result (exit ${code ?? "signal"})`));
         const text = finalResult ?? deltas.join("");
-        const end = code === 0 ? terminal("success", "success", []) : terminal("failed", "protocol", [`Gemini CLI exited ${code ?? "by signal"}`]);
+        const end = finalError !== undefined
+          ? terminal("failed", "protocol", [finalError])
+          : code === 0 ? terminal("success", "success", []) : terminal("failed", "protocol", [`Gemini CLI exited ${code ?? "by signal"}`]);
         finish({ text, end: { kind: "terminal", terminal: end } });
       });
     });

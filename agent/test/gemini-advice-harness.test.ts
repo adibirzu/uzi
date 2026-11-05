@@ -65,15 +65,14 @@ test("Gemini advice chooses final result over deltas and preserves successful si
   assert.equal(signInResult.end.terminal.outcome, "success");
 });
 
-test("Gemini advice writes a JSON schema file, parses object JSON, and fails closed otherwise", async t => {
-  const f = fixture(t, captureScript(path.join(os.tmpdir(), "unused"), '{"type":"result","result":"{\\"ok\\":true}"}'));
-  fs.writeFileSync(f.cli, `#!/bin/sh\n${captureScript(f.capture, '{"type":"result","result":"{\\"ok\\":true}"}')}\n`, { mode: 0o700 });
-  await f.harness.run(request({ output: { kind: "json", schema: { type: "object" } } }), policy);
-  const args = fs.readFileSync(`${f.capture}.argv`, "utf8").split("\n");
-  const i = args.indexOf("--json-schema");
-  assert.ok(i >= 0 && args[i + 1]?.endsWith("output-schema.json"));
-  const invalid = fixture(t, "printf '%s\\n' '{\"type\":\"result\",\"result\":\"[]\"}'");
-  await assert.rejects(invalid.harness.run(request({ output: { kind: "json", schema: { type: "object" } } }), policy), (error: unknown) => error instanceof GeminiAdviceError && error.failure.category === "protocol");
+test("Gemini advice refuses JSON output until native schema enforcement is measured", async t => {
+  const f = fixture(t, "exit 99");
+  await assert.rejects(f.harness.run(request({ output: { kind: "json", schema: { type: "object" } } }), policy), (error: unknown) => {
+    assert.ok(error instanceof GeminiAdviceError);
+    assert.equal(error.failure.category, "protocol");
+    assert.match(error.message, /native outputSchema enforcement is unmeasured/);
+    return true;
+  });
 });
 
 test("Gemini advice rejects model flag injection", async t => {
@@ -90,6 +89,18 @@ test("Gemini advice maps non-zero final and pre-stream sign-in output to termina
   const authResult = await auth.harness.run(request(), policy);
   assert.equal(authResult.end.kind, "terminal");
   assert.equal(authResult.end.terminal.subtype, "authentication");
+});
+
+test("Gemini advice fails closed on an error final event and ignores successful stderr sign-in prose", async t => {
+  const errored = fixture(t, "printf '%s\\n' '{\"type\":\"result\",\"is_error\":true,\"subtype\":\"provider_error\",\"result\":\"nope\"}'");
+  const erroredResult = await errored.harness.run(request(), policy);
+  assert.equal(erroredResult.end.kind, "terminal");
+  assert.equal(erroredResult.end.terminal.outcome, "failed");
+  assert.deepEqual(erroredResult.end.terminal.errors, ["provider_error"]);
+  const successful = fixture(t, "printf '%s\\n' 'not signed in: historical context' >&2\nprintf '%s\\n' '{\"type\":\"result\",\"result\":\"ok\"}'");
+  const successfulResult = await successful.harness.run(request(), policy);
+  assert.equal(successfulResult.end.kind, "terminal");
+  assert.equal(successfulResult.end.terminal.outcome, "success");
 });
 
 test("Gemini advice throws when the CLI exits without a final event", async t => {
@@ -109,6 +120,27 @@ test("Gemini advice timeout terminates its exact child before cleanup", async t 
   const f = fixture(t, `trap ': > ${stopped}; exit 0' TERM\nwhile :; do sleep 0.01; done`);
   await assert.rejects(f.harness.run(request({ timeoutMs: 25, graceMs: 25 }), policy), /exceeded 25ms/);
   assert.equal(fs.existsSync(stopped), true, "timeout sent SIGTERM to the spawned CLI only");
+});
+
+test("Gemini advice bounds settlement when a killed CLI leaves stdout inherited by a background child", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "uzi-gemini-inherited-stdio-"));
+  const pidFile = path.join(root, "background.pid");
+  let backgroundPid: number | undefined;
+  t.after(() => {
+    if (backgroundPid !== undefined) {
+      try { process.kill(backgroundPid, "SIGKILL"); } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const f = fixture(t, `sleep 30 &\necho $! > '${pidFile}'\nwhile :; do sleep 1; done`);
+  const started = Date.now();
+  await assert.rejects(f.harness.run(request({ timeoutMs: 40, graceMs: 30 }), policy), /exceeded 40ms/);
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 250, `settled in ${elapsed}ms, bounded by timeout plus two grace windows`);
+  backgroundPid = Number(fs.readFileSync(pidFile, "utf8").trim());
+  assert.ok(Number.isInteger(backgroundPid) && backgroundPid > 0, "test records the exact background sleep pid for cleanup");
 });
 
 test("Gemini advice refuses an unready source immediately before spawning", async t => {
@@ -134,5 +166,5 @@ test("gemini advice child env is allowlisted and never carries API keys", async 
   const allowed = ["HOME", "LANG", "PATH", "PWD", "SHLVL", "TMPDIR", "TZ", "_"].sort();
   assert.deepEqual(keys, keys.filter(key => allowed.includes(key)), "the child has no environment key outside the exact allowlist and shell-owned PWD/SHLVL/_ keys");
   for (const required of ["HOME", "LANG", "PATH", "TMPDIR", "TZ"]) assert.ok(keys.includes(required));
-  assert.notEqual(home, os.homedir());
+  assert.match(fs.readFileSync(`${capture}.env`, "utf8"), new RegExp(`^HOME=${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
 });
