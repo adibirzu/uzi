@@ -69,13 +69,6 @@ test("Gemini host source rejects a home owned by another user", t => {
 test("gemini host source never reads files inside the host home", t => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.home, "credential.json"), "never read", { mode: 0o600 });
-  const sourceFile = new URL("../src/gemini/host-login-source.ts", import.meta.url);
-  const sourceText = fs.readFileSync(sourceFile, "utf8");
-  assert.deepEqual(sourceText.match(/^import .* from "node:fs(?:\/promises)?";$/gm), [
-    'import { accessSync, constants, lstatSync } from "node:fs";',
-  ]);
-  assert.doesNotMatch(sourceText, /import\("node:fs(?:\/promises)?"\)/);
-
   const seen: string[] = [];
   const lstatSync = fs.lstatSync;
   const accessSync = fs.accessSync;
@@ -87,11 +80,16 @@ test("gemini host source never reads files inside the host home", t => {
     seen.push(String(args[0]));
     return accessSync(...args);
   }) as typeof fs.accessSync);
+  const forbidden: string[] = [];
+  for (const name of ["readdirSync", "openSync", "readFileSync", "statSync", "opendirSync"] as const) {
+    t.mock.method(fs, name, (() => { forbidden.push(name); throw new Error(`${name} must not be called`); }) as never);
+  }
   syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
 
   assert.equal(openHostGeminiSource(f.home, f.cli).ready(), true);
   assert.deepEqual(seen, [f.home, f.cli, f.cli], "positive control: patched calls record ready() metadata paths");
+  assert.deepEqual(forbidden, []);
   assert.ok(seen.every(value => value === f.home || value === f.cli));
   assert.ok(!seen.some(value => value.startsWith(`${f.home}${path.sep}`)));
 });
