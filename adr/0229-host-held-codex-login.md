@@ -93,3 +93,6 @@ an older host-bound run does not permanently exclude a reused branch.
 API-host meters, source-aware parking/cooldown admission, and native-host/UID-split deployment are separate milestones. The M1 bridge does not call
 the server release/refresh routes. It must not be approximated by transmitting
 raw auth data or a zero-byte sealed server login.
+
+Worker-host credential custody requires the worker/runner UID split. Single-UID
+workers refuse this opt-in before opening the host login.

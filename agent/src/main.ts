@@ -69,6 +69,7 @@ import { inspectPodEpochBootstrap } from "./pod-epoch-bootstrap.js";
 import { PodEpochSettlementError, runPodEpochShadow } from "./pod-epoch-reclaim.js";
 
 export function openWorkerHostCodexCredentialSource(home: string, dataDir: string): HostCodexCredentialSource {
+  if (!uidSplitActive()) throw new HostCredentialSourceError("unavailable", "host Codex custody requires UID isolation");
   const stateDir = path.join(dataDir, "codex-host-state");
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   return openHostCodexCredentialSource(home, stateDir);

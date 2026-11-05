@@ -94,6 +94,12 @@ func TestCIFixBranchEligibilityLiveDB(t *testing.T) {
 	eligibility("agent/issue-042", false, false)
 	mustExec(ctx, t, pool, `UPDATE runs SET status='completed',branch=$2 WHERE id=$1`, publishing, branch)
 	eligibility(branch, true, false)
+	for _, status := range []string{"cancelled", "failed"} {
+		attempt := uuid.New()
+		mustExec(ctx, t, pool, `INSERT INTO runs (id,user_id,repo_id,kind,issue_iid,issue_title,issue_description,status,harness,created_at)
+			VALUES ($1,$2,$3,'issue',42,'unstarted','d',$4,'claude',now()+interval '3 days')`, attempt, user, repo, status)
+		eligibility(branch, true, false)
+	}
 	serverPublishing := uuid.New()
 	mustExec(ctx, t, pool, `INSERT INTO runs (id,user_id,repo_id,kind,issue_iid,issue_title,issue_description,status,harness,created_at)
 		VALUES ($1,$2,$3,'issue',42,'replacement','d','running','claude',now()+interval '3 days')`, serverPublishing, user, repo)

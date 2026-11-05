@@ -476,3 +476,6 @@ on the one releasing soonest (`pool_exhausted`) and waits as any run does.
   token switch.
 - **Out of scope:** pooling OpenAI API keys, and Codex chat. Neither is chosen
   by this mode.
+
+Worker-host credential custody requires the worker/runner UID split. Single-UID
+workers refuse this opt-in before opening the host login.

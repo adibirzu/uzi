@@ -439,9 +439,10 @@ export class SummaryRunner {
    *  throws into the caller. Returns the accumulated text; THROWS on timeout or an error
    *  result so the public methods can catch → null. */
   private async runModel(pass: "intent" | "plan", input: IntentSummaryInput, prompt: string): Promise<string> {
+    const selection = selectCodexBinding({ codex: input.claim?.secrets.codex });
+    if (selection.kind === "worker_host") throw new WorkerHostSummaryDisabledError();
     const reportUsage = this.usageReporter(pass, input.onUsage);
     try {
-      const selection = selectCodexBinding({ codex: input.claim?.secrets.codex });
       let harness: Pick<ReadOnlyModelPassOpts, "token" | "model" | "effort" | "codex">;
       if (selection.kind === "codex") {
         if (!this.codexAdviceHarnessFactory) throw new Error("Codex claim but no Codex advice-harness factory is wired");
@@ -456,8 +457,6 @@ export class SummaryRunner {
             refresh: "deny",
           },
         };
-      } else if (selection.kind === "worker_host") {
-        throw new WorkerHostSummaryDisabledError();
       } else {
         harness = { token: input.token, model: input.model };
       }

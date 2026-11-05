@@ -37,6 +37,7 @@ for (const pass of ["intent", "plan"] as const) {
       let claudeCalls = 0;
       let factoryCalls = 0;
       const warnings: Record<string, unknown>[] = [];
+      const homesBefore = await fs.readdir(homeRoot);
       const queryFn = (() => { claudeCalls++; throw new Error("unexpected Claude"); }) as unknown as SdkQueryFn;
       const factory = (async () => { factoryCalls++; throw new Error("unexpected Codex"); }) as CodexAdviceHarnessFactory;
       const r = new SummaryRunner({ ...nullLogger(), warn: (_message, fields) => void warnings.push(fields ?? {}) }, {
@@ -45,6 +46,7 @@ for (const pass of ["intent", "plan"] as const) {
       assert.equal(await run(r, { ...base, token: "server-anthropic", claim: { run_id: "run-summary", secrets: { codex: workerHostBinding } } }), null);
       assert.equal(claudeCalls, 0);
       assert.equal(factoryCalls, 0);
+      assert.deepEqual(await fs.readdir(homeRoot), homesBefore);
       assert.deepEqual(warnings, [{ reason: "worker_host_credential" }]);
     });
 

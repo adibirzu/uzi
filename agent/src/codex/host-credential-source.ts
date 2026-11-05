@@ -442,6 +442,7 @@ class Source implements HostCodexCredentialSource {
 
   read(): HostCodexLogin {
     const login = this.current().login;
+    if (this.flight) return login;
     const fence = this.fence();
     if (fence !== undefined) {
       if (this.refreshDigest(login, fence.salt) === fence.digest) relogin();
@@ -539,6 +540,7 @@ class Source implements HostCodexCredentialSource {
   }
 
   async release(signal?: AbortSignal): Promise<HostCodexLogin> {
+    if (this.flight) return this.waitForFlight(this.flight, signal);
     const observed = this.current().login;
     return this.fence() !== undefined || refreshDue(observed, this.now())
       ? this.refreshFrom(observed, signal) : this.read();

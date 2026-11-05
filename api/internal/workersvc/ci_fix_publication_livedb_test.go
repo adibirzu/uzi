@@ -125,6 +125,13 @@ func TestCIFixHostPublicationRaceLiveDB(t *testing.T) {
 				if fixes != 0 {
 					t.Fatalf("host publication created %d server-backed CI fixes", fixes)
 				}
+				for _, status := range []string{"cancelled", "failed"} {
+					env.exec(`INSERT INTO runs (id,user_id,repo_id,kind,issue_iid,issue_title,issue_description,status,harness,created_at)
+						VALUES ($1,$2,$3,'issue',$4,'unstarted','d',$5,'claude',now()+interval '30 minutes')`, uuid.New(), userID, repoID, iid, status)
+					if _, err := create(env.ctx, userID, repoID, ref, "Fix CI", "d", ciFixSnapshot(ref, 395301), nil); !errors.Is(err, ErrHostCodexDerivedRunUnsupported) {
+						t.Fatalf("unstarted %s replacement superseded host provenance: %v", status, err)
+					}
+				}
 				env.exec(`INSERT INTO runs (id,user_id,repo_id,kind,issue_iid,issue_title,issue_description,status,branch,harness,created_at)
 					VALUES ($1,$2,$3,'issue',$4,'replacement','d','completed',$5,'claude',now()+interval '1 hour')`,
 					uuid.New(), userID, repoID, iid, ref)

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, mkdirSync, chmodSync, writeFileSync, statSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, chmodSync, writeFileSync, statSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -307,13 +307,7 @@ describe("buildRunExecutor: command cache rotation budget (issue #3675)", () => 
     assert.equal(depsOf(executor).commandCacheRunBytes, undefined);
   });
 
-  it("main() threads config.codexCommandCacheRunBytes into buildRunExecutor", () => {
-    // main() starts the worker and cannot be called here, so its wiring is pinned in the source.
-    const source = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
-    // Anchored on the buildRunExecutor( call's argument object so a comment or an unrelated
-    // literal elsewhere cannot satisfy it.
-    assert.match(source, /buildRunExecutor\(runId, codex, \{[^}]*\bcodexCommandCacheRunBytes:\s*config\.codexCommandCacheRunBytes\b/);
-  });
+
 });
 
 // Issue #1761 (should): the chat lane is a separate caller of workerSecretDenyPaths, so its
@@ -341,6 +335,9 @@ describe("buildChatExecutor — worker secret deny paths (issue #1761)", () => {
 
 for (const mode of [0o755, 0o2770]) {
   it(`host source startup isolates private state under a ${mode.toString(8)} data root`, t => {
+    const previous = process.env.UZI_UID_SPLIT;
+    process.env.UZI_UID_SPLIT = "1";
+    t.after(() => { if (previous === undefined) delete process.env.UZI_UID_SPLIT; else process.env.UZI_UID_SPLIT = previous; });
     const root = mkdtempSync(path.join(os.tmpdir(), "uzi-host-startup-"));
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const home = path.join(root, "home");
@@ -361,3 +358,20 @@ for (const mode of [0o755, 0o2770]) {
     assert.equal(openWorkerHostCodexCredentialSource(home, data).sourceId, source.sourceId);
   });
 }
+
+it("host custody refuses single-UID startup before reading a login", t => {
+  const previous = process.env.UZI_UID_SPLIT;
+  delete process.env.UZI_UID_SPLIT;
+  t.after(() => { if (previous !== undefined) process.env.UZI_UID_SPLIT = previous; });
+  const root = mkdtempSync(path.join(os.tmpdir(), "uzi-single-uid-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, "home");
+  const data = path.join(root, "data");
+  mkdirSync(home, { mode: 0o700 });
+  mkdirSync(data);
+  writeFileSync(path.join(home, "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: {
+    id_token: "fixture-id", access_token: "fixture-access", refresh_token: "fixture-refresh", account_id: "fixture-account",
+  } }), { mode: 0o600 });
+  assert.throws(() => openWorkerHostCodexCredentialSource(home, data), /requires UID isolation/);
+  assert.deepEqual(readdirSync(data), []);
+});

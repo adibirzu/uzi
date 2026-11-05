@@ -552,3 +552,29 @@ test("a refresh cannot reach the provider when its uncertainty fence cannot be p
   await assert.rejects(source.refresh(), closed);
   assert.equal(calls, 0);
 });
+
+test("bootstrap reads remain usable while release waits for the shared refresh", async t => {
+  const f = fixture(t);
+  let complete!: (response: Response) => void;
+  let started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const source = openHostCodexCredentialSource(f.home, f.state, {
+    fetch: async () => { started(); return new Promise<Response>(resolve => { complete = resolve; }); },
+  });
+  const refreshing = source.refresh();
+  await entered;
+  try {
+    assert.equal(source.read().accountId, ACCOUNT);
+    assert.equal(source.ready(), true);
+    let released = false;
+    const waiting = source.release().then(login => { released = true; return login; });
+    await Promise.resolve();
+    assert.equal(released, false);
+    complete(new Response(JSON.stringify({ access_token: "rotated-fixture-access" })));
+    assert.equal((await waiting).accessToken, "rotated-fixture-access");
+    await refreshing;
+  } finally {
+    complete(new Response("{}"));
+    await refreshing.catch(() => {});
+  }
+});
