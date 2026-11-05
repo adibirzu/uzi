@@ -1,7 +1,7 @@
 # Fork PRD #10: selectable workflow profiles, AXI tools and verification
 
 **Tracking:** [fork #10](https://github.com/adibirzu/uzi/issues/10), [fork #8](https://github.com/adibirzu/uzi/issues/8), [fork #9](https://github.com/adibirzu/uzi/issues/9).
-**Status:** design proposal; implementation not started. Native uzi remains available. (AI-synced 2026-11-05)
+**Status:** design proposal; M0 interface tracing in progress; runtime implementation not started. Native uzi remains available. (AI-synced 2026-11-05)
 **Origin:** owner request to inspect the existing harness, retain an option to use uzi's own harness, and add the AXI plugin and no-mistakes approaches. This extends the contribution roadmap; it does not imply upstream acceptance.
 
 ## User-visible goal
@@ -62,6 +62,20 @@ Validation: trace the selected mode end to end using a fake adapter, including
 missing adapter, unavailable worker capability, cancellation and stale receipts.
 Do not add a UI switch whose selected mode silently falls back to native.
 
+Interface tracing (2026-11-05): existing `uzi run create`, `get`, `wait`,
+`cancel` and `resume` commands can support a Firstmate front door that dispatches
+native uzi work. This alone does not implement the full external workflow.
+Firstmate's process-event extension is a notification contract, not an execution
+or branch-custody adapter. Its documented resume support varies by underlying
+runtime; a generic resume promise cannot be inferred from a session identifier.
+
+The first adapter proof must identify the execution owner and publication owner
+at every transition. While a native uzi run can still publish or rework its
+branch, an external verifier must not start fixing or publishing that branch.
+A terminal result is an input to a verified custody handoff, not permission to
+assume every producer has stopped. Cancellation and stale-head receipts must be
+exercised against the real owning interface before M0 is marked complete.
+
 ### M1 — profile selection and frozen provenance
 
 - Owner-scoped repo default plus explicit run override, resolved server-side and frozen with the run; native remains the default for existing data and callers.
@@ -84,6 +98,14 @@ Schema constraints follow the repository's nonblocking migration conventions.
 Validation: exact pin/digest handling, missing overlays, safe path containment,
 manifest rejection, poisoned metadata, cross-owner reads and opt-out behavior.
 Run a real sandbox task only after those deterministic checks pass.
+
+Contract gap found during M0 tracing: the inspected ledger v1 has no uzi outcome
+event and no run-cost/model fields on its existing stream event. Do not label an
+uzi result as a no-mistakes pass or overload a reviewer-model field. A dedicated
+metadata event needs an additive harness-library change, real writer/exporter
+tests and a reviewed source pin before uzi can emit it. Validate any accepted
+run identifier, status, model, cost and head; discard source prose and unknown
+fields before invoking the writer. Source inspection alone is not export proof.
 
 ### M3 — AXI tool profile
 
@@ -138,6 +160,7 @@ needed, is separate from worker-bound implementation.
 - 2026-11-05: owner requested native-harness choice, existing harness integration, AXI plugin approach and no-mistakes approach; both credential review repairs were separately authorized and remain on the credential feature branch.
 - 2026-11-05: source audit separates policy library, supervisor, model launcher and verifier. No third model HarnessKind, wholesale script import, automatic host plugin loading or nested no-mistakes execution is justified by that audit.
 - 2026-11-05: RESOLVED by owner: the selector is per repo/run, native (default) versus the full existing harness workflow (orchestration, policies, verification tools); not narrowed to overlays. Phased implementation and qualification obligations and all audit/safety requirements are retained. Scope: documentation-only proposal validated by the docs checker plus static prose review; planned features are not live-tested or claimed shipped, and no runtime selector is implemented here.
+- 2026-11-05: M0 trace distinguishes native dispatch, process notifications, runtime-specific resume and publication custody; none is treated as proof of the full custom workflow. Ledger v1 needs an explicit uzi event before outcome integration. M0 remains incomplete until its executable adapter cases pass. (AI-synced 2026-11-05)
 
 ## Upstream coordination
 
