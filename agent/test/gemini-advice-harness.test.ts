@@ -107,6 +107,19 @@ test("Gemini advice maps non-zero final and pre-stream sign-in output to termina
   assert.equal(authResult.end.terminal.subtype, "authentication");
 });
 
+test("Gemini advice requires word boundaries for pre-stream log-in diagnostics", async t => {
+  const substringOnly = fixture(t, "printf '%s\\n' 'catalog include failed' >&2\nexit 1");
+  await assert.rejects(substringOnly.harness.run(request(), policy), (error: unknown) => {
+    assert.ok(error instanceof GeminiAdviceError);
+    assert.equal(error.failure.category, "protocol");
+    return true;
+  });
+  const auth = fixture(t, "printf '%s\\n' 'please log in' >&2\nexit 1");
+  const authResult = await auth.harness.run(request(), policy);
+  assert.equal(authResult.end.kind, "terminal");
+  assert.equal(authResult.end.terminal.subtype, "authentication");
+});
+
 test("Gemini advice recognizes the real agy 1.5.1 auth-failure result frame", async t => {
   const line = '{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"finished_reason":"error"}}';
   const f = fixture(t, `printf '%s\\n' "Error: authentication required. Run 'agy' to log in, then retry." >&2\nprintf '%s\\n' 'error: authentication failed or timed out' >&2\nprintf '%s\\n' '${line}'\nexit 1`);
