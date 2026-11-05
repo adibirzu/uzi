@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import { accessSync, constants, lstatSync } from "node:fs";
 
 export interface HostGeminiSource {
   readonly kind: "worker_host";
@@ -14,7 +14,7 @@ export function openHostGeminiSource(home: string, cli: string): HostGeminiSourc
     kind: "worker_host",
     ready(): boolean {
       try {
-        const homeStat = fs.lstatSync(home);
+        const homeStat = lstatSync(home);
         if (
           homeStat.isSymbolicLink()
           || !homeStat.isDirectory()
@@ -23,12 +23,19 @@ export function openHostGeminiSource(home: string, cli: string): HostGeminiSourc
         ) {
           return false;
         }
-        const cliLstat = fs.lstatSync(cli);
-        const cliStat = fs.statSync(cli);
-        if (cliLstat.isSymbolicLink() || !cliLstat.isFile() || !cliStat.isFile() || (cliStat.mode & 0o111) === 0) {
+        const cliStat = lstatSync(cli);
+        const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+        if (
+          cliStat.isSymbolicLink()
+          || !cliStat.isFile()
+          || (cliStat.mode & 0o111) === 0
+          || (cliStat.mode & 0o022) !== 0
+          || uid === undefined
+          || (cliStat.uid !== uid && cliStat.uid !== 0)
+        ) {
           return false;
         }
-        fs.accessSync(cli, fs.constants.X_OK);
+        accessSync(cli, constants.X_OK);
         return true;
       } catch {
         return false;

@@ -537,7 +537,7 @@ function parseCodexCredentialSource(env: NodeJS.ProcessEnv): CodexCredentialSour
 
 /** Parse Gemini's host-only custody switch; unlike Codex, no server fallback exists. */
 function parseGeminiCredentialSource(env: NodeJS.ProcessEnv): GeminiCredentialSource {
-  const source = env.UZI_GEMINI_CREDENTIAL_SOURCE?.trim();
+  const source = env.UZI_GEMINI_CREDENTIAL_SOURCE?.trim().toLowerCase();
   if (source === undefined || source === "") return undefined;
   if (source !== "worker_host") {
     throw new Error(`invalid UZI_GEMINI_CREDENTIAL_SOURCE ${JSON.stringify(env.UZI_GEMINI_CREDENTIAL_SOURCE)} (expected "worker_host")`);

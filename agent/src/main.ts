@@ -544,8 +544,10 @@ async function main(): Promise<void> {
 
   if (config.geminiCredentialSource?.kind === "worker_host") {
     const source = openHostGeminiSource(config.geminiCredentialSource.home, config.geminiCredentialSource.cli);
+    const ready = source.ready();
+    if (!ready) throw new Error("host Gemini login source is not ready");
     config.geminiHostReadiness = () => source.ready();
-    log.info("host Gemini login source validated", { source_kind: source.kind });
+    log.info("host Gemini login source validated", { source_kind: source.kind, ready });
   }
 
   // Issue #3153: when TMPDIR lives under the (now persistent) `<dataDir>/runner`, confirm it is a

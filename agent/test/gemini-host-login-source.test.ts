@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -22,7 +23,7 @@ test("Gemini host source accepts only a protected home and executable regular CL
   assert.equal(openHostGeminiSource(f.home, f.cli).ready(), true);
 });
 
-test("Gemini host source rejects symlink homes, wrong modes, missing CLIs, and non-executable CLIs", t => {
+test("Gemini host source rejects symlink homes, wrong modes, missing or unsafe CLIs", t => {
   const f = fixture(t);
   const source = openHostGeminiSource(f.home, f.cli);
   fs.chmodSync(f.home, 0o755);
@@ -38,43 +39,51 @@ test("Gemini host source rejects symlink homes, wrong modes, missing CLIs, and n
   assert.equal(source.ready(), false);
   fs.writeFileSync(f.cli, "#!/bin/sh\n", { mode: 0o600 });
   assert.equal(source.ready(), false);
+  fs.writeFileSync(f.cli, "#!/bin/sh\n", { mode: 0o777 });
+  assert.equal(source.ready(), false);
+  fs.chmodSync(f.cli, 0o700);
+  fs.unlinkSync(f.cli);
+  fs.symlinkSync("/bin/sh", f.cli);
+  assert.equal(source.ready(), false);
+  fs.unlinkSync(f.cli);
+  fs.mkdirSync(f.cli, { mode: 0o700 });
+  assert.equal(source.ready(), false);
 });
 
-test.skip("Gemini host source rejects a home owned by another user", () => {
-  // This fixture cannot change ownership without elevated privileges. ready() checks
-  // lstat.uid against process.getuid() in production.
+test("Gemini host source rejects a home owned by another user", t => {
+  const f = fixture(t);
+  const realGetuid = process.getuid;
+  assert.ok(realGetuid, "Node worker platforms provide getuid");
+  t.mock.method(process as typeof process & { getuid: () => number }, "getuid", () => realGetuid() + 1);
+  assert.equal(openHostGeminiSource(f.home, f.cli).ready(), false);
 });
 
 test("gemini host source never reads files inside the host home", t => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.home, "credential.json"), "never read", { mode: 0o600 });
-  const underHome = (value: unknown): boolean => typeof value === "string" && (value === f.home || value.startsWith(`${f.home}${path.sep}`));
-  const denied = (original: (...args: never[]) => unknown) => (...args: never[]): unknown => {
-    if (underHome(args[0])) throw new Error("host home contents must not be read");
-    return original(...args);
-  };
-  const originals = {
-    readFileSync: fs.readFileSync,
-    readdirSync: fs.readdirSync,
-    openSync: fs.openSync,
-    readFile: fs.promises.readFile,
-    readdir: fs.promises.readdir,
-    open: fs.promises.open,
-  };
-  fs.readFileSync = denied(originals.readFileSync as never) as typeof fs.readFileSync;
-  fs.readdirSync = denied(originals.readdirSync as never) as typeof fs.readdirSync;
-  fs.openSync = denied(originals.openSync as never) as typeof fs.openSync;
-  fs.promises.readFile = denied(originals.readFile as never) as typeof fs.promises.readFile;
-  fs.promises.readdir = denied(originals.readdir as never) as typeof fs.promises.readdir;
-  fs.promises.open = denied(originals.open as never) as typeof fs.promises.open;
-  try {
-    assert.equal(openHostGeminiSource(f.home, f.cli).ready(), true);
-  } finally {
-    fs.readFileSync = originals.readFileSync;
-    fs.readdirSync = originals.readdirSync;
-    fs.openSync = originals.openSync;
-    fs.promises.readFile = originals.readFile;
-    fs.promises.readdir = originals.readdir;
-    fs.promises.open = originals.open;
-  }
+  const sourceFile = new URL("../src/gemini/host-login-source.ts", import.meta.url);
+  const sourceText = fs.readFileSync(sourceFile, "utf8");
+  assert.deepEqual(sourceText.match(/^import .* from "node:fs(?:\/promises)?";$/gm), [
+    'import { accessSync, constants, lstatSync } from "node:fs";',
+  ]);
+  assert.doesNotMatch(sourceText, /import\("node:fs(?:\/promises)?"\)/);
+
+  const seen: string[] = [];
+  const lstatSync = fs.lstatSync;
+  const accessSync = fs.accessSync;
+  t.mock.method(fs, "lstatSync", ((...args: Parameters<typeof fs.lstatSync>) => {
+    seen.push(String(args[0]));
+    return lstatSync(...args);
+  }) as typeof fs.lstatSync);
+  t.mock.method(fs, "accessSync", ((...args: Parameters<typeof fs.accessSync>) => {
+    seen.push(String(args[0]));
+    return accessSync(...args);
+  }) as typeof fs.accessSync);
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+
+  assert.equal(openHostGeminiSource(f.home, f.cli).ready(), true);
+  assert.deepEqual(seen, [f.home, f.cli, f.cli], "positive control: patched calls record ready() metadata paths");
+  assert.ok(seen.every(value => value === f.home || value === f.cli));
+  assert.ok(!seen.some(value => value.startsWith(`${f.home}${path.sep}`)));
 });

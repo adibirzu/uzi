@@ -1201,9 +1201,8 @@ export class Worker {
             : { ...this.config.codexHostSource, ready: false };
           this.client.setCodexHostSource(this.config.codexHostSource);
         }
-        // Gemini is metadata-only for now; keep checking its local boundary on the
-        // same cadence as Codex, ready for future heartbeat metadata.
-        if (this.config.geminiCredentialSource?.kind === "worker_host") this.config.geminiHostReadiness?.();
+        // Gemini readiness is advertised only at registration today. #29 must add
+        // heartbeat metadata before a source that goes stale can be withdrawn.
         // PRD #1391 M5: report per-run outbox depth alongside the resource sample. The
         // client sends the array only when the server negotiated `heartbeat_outbox`,
         // so an older api sees a byte-identical heartbeat. Assembled BEFORE the send so

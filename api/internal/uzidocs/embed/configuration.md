@@ -546,7 +546,7 @@ Set on the `agent` compose service (profile `agent`) or on a standalone `docker 
 | `UZI_CODEX_HOST_HOME` | — (required for `worker_host`) | Absolute path to the dedicated host-held login as seen by this worker. It is ignored for `server`; see [Host-held login](./codex-credentials.md#host-held-login-fork-experimental) rather than sharing an everyday Codex home. |
 | `UZI_GEMINI_CREDENTIAL_SOURCE` | disabled | Gemini host-login custody mode. Empty/unset disables Gemini; only `worker_host` is accepted (there is no server-held Gemini credential or fallback). |
 | `UZI_GEMINI_HOST_HOME` | — (required for `worker_host`) | Absolute path to the dedicated Gemini login directory. It must be a real, worker-owned `0700` directory; the worker only validates its metadata and never reads files inside it. |
-| `UZI_GEMINI_CLI` | — (required for `worker_host`) | Absolute path to the Gemini CLI. It must be a regular executable file before the worker advertises `gemini_host_login_v1`. |
+| `UZI_GEMINI_CLI` | — (required for `worker_host`) | Absolute path to the Gemini CLI. It must be an owner- or root-owned, non-group/world-writable regular executable file before the worker advertises `gemini_host_login_v1`; point it at the resolved executable target, not an npm global-install symlink. |
 | `UZI_STUB_PLAN_GATE` | `false` | Only meaningful with `UZI_EXECUTOR=stub`: makes the stub drive the M4 plan-approval gate before committing, instead of committing immediately. Test/harness use only. |
 | `WORKER_HEARTBEAT_INTERVAL` | `15s` | How often the worker posts a heartbeat. |
 | `WORKER_POLL_INTERVAL` | `3s` | How often an idle worker asks the server for a run to claim. |
