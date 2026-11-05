@@ -83,12 +83,13 @@ review, and then-fix: each child inherits the parent's exact worker, source ID,
 and source revision in the create transaction. An incomplete persisted tuple is
 also a typed host-source-unavailable refusal; it never downgrades to D11.
 The exact worker/source revision is revalidated under `FOR SHARE` before commit;
-claim-time admission remains the final fence over the bounded post-commit
-heartbeat window. CI-fix reads the latest same-user branch parent (created-at,
+there is no dedicated concurrency test for that `FOR SHARE`; claim-time admission
+remains the final check over the bounded post-commit heartbeat window. CI-fix reads the latest same-user branch parent (created-at,
 then id); a latest non-host parent uses the old non-host path, except that an
 older host-bound row retains the prior typed refusal rather than silently
-switching credential custody. Successor/re-dispatch and restart do not mint a
-new run or re-resolve credentials: they preserve their existing run binding.
+switching credential custody. Restart and re-dispatch reuse the row and its
+exact-worker claim pin. A successor is a new user-initiated create that resolves
+anew (D11, or an explicit source placed by tuple).
 Plan/code cross-check remain typed refusals because they require an
 opposite-harness server credential rather than the parent's execution lane.
 

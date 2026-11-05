@@ -3,7 +3,6 @@ package workersvc
 import (
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -156,11 +155,40 @@ func TestHostInheritIncompleteAndCIFixOwnershipLiveDB(t *testing.T) {
 			t.Fatalf("err=%v", err)
 		}
 		var n int
-		_ = f.env.pool.QueryRow(f.env.ctx, `SELECT count(*) FROM runs WHERE review_target_run_id=$1`, parent).Scan(&n)
+		if err := f.env.pool.QueryRow(f.env.ctx, `SELECT count(*) FROM runs WHERE review_target_run_id=$1`, parent).Scan(&n); err != nil {
+			t.Fatalf("count children: %v", err)
+		}
 		if n != 0 {
 			t.Fatalf("fallback inserted %d children", n)
 		}
 	})
+	for _, tc := range []struct {
+		name   string
+		setBad string
+	}{
+		{"null_source_id", "codex_credential_source_id=NULL"},
+		{"zero_revision", "codex_credential_source_revision=0"},
+	} {
+		t.Run("incomplete_"+tc.name+"_never_falls_back", func(t *testing.T) {
+			f := newHostInheritanceFixture(t)
+			seedAnthropicToken(t, f.env, f.userID)
+			alias := f.env.seedStaticAPIKey(t, f.userID, "server", codexToken("sk"))
+			makeCodexDefault(t, f.env, alias)
+			parent := f.parent(t, "task", "uzi/task/"+uuid.NewString())
+			f.env.exec("UPDATE runs SET "+tc.setBad+" WHERE id=$1", parent)
+			_, err := atomicSvc(f.env).CreateTaskReviewRun(f.env.ctx, f.userID, f.repoID, parent, "uzi/task/"+uuid.NewString(), "main", HarnessCodex)
+			if !errors.Is(err, ErrHostCodexSourceUnavailable) {
+				t.Fatalf("err=%v, want ErrHostCodexSourceUnavailable", err)
+			}
+			var n int
+			if err := f.env.pool.QueryRow(f.env.ctx, `SELECT count(*) FROM runs WHERE review_target_run_id=$1`, parent).Scan(&n); err != nil {
+				t.Fatalf("count children: %v", err)
+			}
+			if n != 0 {
+				t.Fatalf("fallback inserted %d children", n)
+			}
+		})
+	}
 	t.Run("ci_fix_uses_latest_same_user_parent", func(t *testing.T) {
 		f := newHostInheritanceFixture(t)
 		ref := "fix/" + uuid.NewString()
@@ -175,8 +203,14 @@ func TestHostInheritIncompleteAndCIFixOwnershipLiveDB(t *testing.T) {
 	t.Run("ci_fix_ignores_other_user_host_parent", func(t *testing.T) {
 		f := newHostInheritanceFixture(t)
 		ref := "fix/" + uuid.NewString()
-		other := newHostInheritanceFixture(t)
-		other.parent(t, "issue", ref)
+		otherUser := f.env.seedUser(t)
+		otherWorker := uuid.New()
+		f.env.exec(`INSERT INTO workers(id,user_id,name,token_hash,status,last_heartbeat_at,protocol_capabilities,codex_host_source_id,codex_host_source_revision,codex_host_source_ready)
+			VALUES($1,$2,$3,$4,'online',now(),ARRAY['codex_host_login_v1','codex_harness_v1','codex_runtime_v2'],$5,7,true)`, otherWorker, otherUser, "other-"+otherWorker.String(), otherWorker[:], "host-"+uuid.NewString())
+		otherParent := f.env.seedCodexRun(t, otherUser, otherWorker, f.repoID)
+		f.env.exec(`UPDATE runs SET kind='issue', status='completed', harness='codex', branch=$2,
+			codex_credential_source_kind='worker_host', codex_credential_source_id=$3,
+			codex_credential_source_revision=7, codex_credential_source_worker_id=$4 WHERE id=$1`, otherParent, ref, "host-"+uuid.NewString(), otherWorker)
 		r, err := atomicSvc(f.env).CreateAutoCIFixRun(f.env.ctx, f.userID, f.repoID, ref, "fix", "", sampleSnapshot(), nil)
 		if err != nil {
 			t.Fatalf("CreateAutoCIFixRun: %v", err)
@@ -184,14 +218,8 @@ func TestHostInheritIncompleteAndCIFixOwnershipLiveDB(t *testing.T) {
 		if r.UserID != f.userID {
 			t.Fatalf("child owner=%s", r.UserID)
 		}
+		if r.CodexCredentialSourceKind.Valid && r.CodexCredentialSourceKind.String == "worker_host" {
+			t.Fatalf("other user's host parent bound child: %+v", r.CodexCredentialSourceKind)
+		}
 	})
-}
-
-// TestHostInheritRestartKeepsPersistedBindingLiveDB documents restart/successor behavior:
-// these are lifecycle transitions on the existing row, not new resolver calls.
-func TestHostInheritRestartKeepsPersistedBindingLiveDB(t *testing.T) {
-	f := newHostInheritanceFixture(t)
-	parent := f.parent(t, "issue", "agent/"+uuid.NewString())
-	f.env.exec(`UPDATE runs SET status='queued', worker_id=NULL, status_since=$2 WHERE id=$1`, parent, time.Now())
-	assertHostInherited(t, f, parent)
 }

@@ -111,6 +111,8 @@ func writeCIFixCreateError(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusConflict, "an active CI-fix run already exists for this ref")
 	case errors.Is(err, workersvc.ErrBranchInUse):
 		httpx.Error(w, http.StatusConflict, "an active run already occupies this branch")
+	case errors.Is(err, workersvc.ErrCIFixBranchParentChanged):
+		httpx.ErrorReason(w, http.StatusConflict, err.Error(), "ci_fix_branch_parent_changed")
 	case errors.Is(err, workersvc.ErrHostCodexDerivedRunUnsupported):
 		httpx.ErrorReason(w, http.StatusConflict, err.Error(), "host_codex_derived_run_unsupported")
 	default:

@@ -67,6 +67,10 @@ var ErrActiveFixExists = errors.New("an active CI-fix run already exists for thi
 // ref's branch/worktree (the cross-kind same-branch exclusion). Mapped to 409.
 var ErrBranchInUse = errors.New("an active run already occupies this branch")
 
+// ErrCIFixBranchParentChanged is a retryable conflict: the latest same-user
+// branch parent changed after CI-fix selected its credential-resolution lane.
+var ErrCIFixBranchParentChanged = errors.New("the branch parent changed while this CI-fix request ran; try again")
+
 // FailureSnapshot is the frozen record of the failed pipeline a ci_fix run works
 // from (PRD #6). It is captured at queue time — the pipeline_statuses cache row is
 // overwritten by later syncs, so the run must carry its own copy — stored as
@@ -229,7 +233,7 @@ func (s *Service) createCIFixRun(ctx context.Context, userID, repoID uuid.UUID, 
 			return store.Run{}, e
 		}
 		if (expectedParent == nil && e == nil) || (expectedParent != nil && (e != nil || fresh.ID != *expectedParent)) {
-			return store.Run{}, ErrHostCodexSourceUnavailable
+			return store.Run{}, ErrCIFixBranchParentChanged
 		}
 		if e == nil && !(fresh.CodexCredentialSourceKind.Valid && fresh.CodexCredentialSourceKind.String == "worker_host") {
 			hostBound, e := q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{RepoID: repoID, UserID: userID, Branch: pgtype.Text{String: ref, Valid: true}})

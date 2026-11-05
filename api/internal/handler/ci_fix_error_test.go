@@ -24,6 +24,21 @@ func TestWriteCIFixCreateErrorHostCodexDerivedRunUnsupported(t *testing.T) {
 	}
 }
 
+func TestWriteCIFixCreateErrorBranchParentChanged(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeCIFixCreateError(rec, workersvc.ErrCIFixBranchParentChanged)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["reason"] != "ci_fix_branch_parent_changed" {
+		t.Fatalf("reason = %v, want ci_fix_branch_parent_changed", body["reason"])
+	}
+}
+
 // These worker-route helpers are the terminal response seam for their respective
 // entry points. Keep the machine-readable conflict reason identical to the manual
 // CI-fix and owner-route mappings.

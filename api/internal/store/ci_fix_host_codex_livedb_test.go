@@ -14,7 +14,7 @@ import (
 // run on the same branch must not block a CI fix.
 func TestHasWorkerHostCodexRunForBranchLiveDB(t *testing.T) {
 	ctx, q, pool := autoEligPool(t)
-	user := seedBareUser(ctx, t, pool)
+	user, otherUser := seedBareUser(ctx, t, pool), seedBareUser(ctx, t, pool)
 	conn := uuid.New()
 	mustExec(ctx, t, pool, `INSERT INTO forge_connections (id,user_id,forge_type,base_url,bot_username,bot_forge_user_id,token_ciphertext)
 		VALUES ($1,$2,'github','https://forge.e2e','bot',1,$3)`, conn, user, []byte{1})
@@ -25,9 +25,9 @@ func TestHasWorkerHostCodexRunForBranchLiveDB(t *testing.T) {
 		return id
 	}
 	repo, otherRepo := seedRepo(), seedRepo()
-	branch, otherBranch := "agent/issue-42", "agent/issue-43"
+	branch, otherBranch, otherUserBranch := "agent/issue-42", "agent/issue-43", "agent/issue-44"
 	issueIID := int64(0)
-	seedRun := func(repo uuid.UUID, branch, source string) {
+	seedRun := func(user, repo uuid.UUID, branch, source string) {
 		id := uuid.New()
 		issueIID++
 		if source == "worker_host" {
@@ -39,29 +39,33 @@ func TestHasWorkerHostCodexRunForBranchLiveDB(t *testing.T) {
 		mustExec(ctx, t, pool, `INSERT INTO runs (id,user_id,repo_id,kind,issue_iid,issue_title,issue_description,status,branch,harness)
 			VALUES ($1,$2,$3,'issue',$4,'t','d','queued',$5,'codex')`, id, user, repo, issueIID, branch)
 	}
-	seedRun(repo, branch, "server")
+	seedRun(user, repo, branch, "server")
 
-	has := func(repo uuid.UUID, branch string) bool {
+	has := func(user, repo uuid.UUID, branch string) bool {
 		t.Helper()
 		got, err := q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{
-			RepoID: repo, Branch: pgtype.Text{String: branch, Valid: true},
+			RepoID: repo, UserID: user, Branch: pgtype.Text{String: branch, Valid: true},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return got
 	}
-	if has(repo, branch) {
+	if has(user, repo, branch) {
 		t.Fatal("server-credential run matched worker-host guard")
 	}
-	seedRun(repo, branch, "worker_host")
-	if !has(repo, branch) {
+	seedRun(user, repo, branch, "worker_host")
+	if !has(user, repo, branch) {
 		t.Fatal("worker-host run on the same repo and branch did not match")
 	}
-	if has(repo, otherBranch) {
+	seedRun(otherUser, repo, otherUserBranch, "worker_host")
+	if has(user, repo, otherUserBranch) {
+		t.Fatal("other user's worker-host run on the same repo and branch matched")
+	}
+	if has(user, repo, otherBranch) {
 		t.Fatal("worker-host run on another branch matched")
 	}
-	if has(otherRepo, branch) {
+	if has(user, otherRepo, branch) {
 		t.Fatal("worker-host run on another repo matched")
 	}
 }
