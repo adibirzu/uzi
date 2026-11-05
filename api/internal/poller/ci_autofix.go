@@ -302,10 +302,9 @@ func (d *CIAutoFix) detectOne(ctx context.Context, r store.ListEnabledReposWithC
 				slog.Warn("poller: ci-autofix start comment", "repo", r.PathWithNamespace, "ref", ref, "error", err)
 			}
 		}
-	case errors.Is(err, workersvc.ErrActiveFixExists), errors.Is(err, workersvc.ErrBranchInUse),
-		errors.Is(err, workersvc.ErrHostCodexDerivedRunUnsupported):
-		// A race with the manual Fix-CI button (or an issue run on the branch), or a
-		// permanent host-Codex derived-run refusal: swallow, no comment, no counter advance.
+	case errors.Is(err, workersvc.ErrHostCodexDerivedRunUnsupported):
+		return
+	case errors.Is(err, workersvc.ErrActiveFixExists), errors.Is(err, workersvc.ErrBranchInUse):
 		d.recordPipeline(ctx, r, ref, cand.PipelineID)
 	default:
 		// ErrRepoNotFound / a transient DB error: leave unrecorded so the next tick retries.

@@ -113,6 +113,10 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if req.CodexCredentialSource != nil && req.CredentialOverride != nil {
+		httpx.ErrorReason(w, http.StatusBadRequest, "codex_credential_source and credential_override are mutually exclusive", "credential_selection_conflict")
+		return
+	}
 	if req.IssueIID <= 0 {
 		httpx.Error(w, http.StatusBadRequest, "issue_iid must be a positive integer")
 		return

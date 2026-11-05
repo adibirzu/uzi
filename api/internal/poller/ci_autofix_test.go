@@ -560,27 +560,24 @@ func TestCIAutofixBranchInUseSwallows(t *testing.T) {
 	}
 }
 
-func TestCIAutofixHostCodexDerivedRunUnsupportedRecordsPipeline(t *testing.T) {
-	// A worker-host Codex parent can never mint a derived CI-fix run. It is a
-	// permanent refusal, so recording the pipeline prevents an error-level retry loop.
+func TestCIAutofixHostCodexDerivedRunUnsupportedRetriesSilently(t *testing.T) {
 	st := &cfStore{candidates: []store.ListCIAutofixCandidateRefsRow{cfCand(9001)}}
 	runs := &cfRuns{err: workersvc.ErrHostCodexDerivedRunUnsupported}
 	notifier := &cfNotifier{}
 	f := &cfForge{jobs: []forge.Job{cfJob()}, logTail: "boom"}
-
-	newCF(st, runs, notifier).detect(context.Background(), cfRepoRow(), f)
-
-	if len(runs.calls) != 1 {
-		t.Fatalf("expected one create attempt, got %d", len(runs.calls))
+	detector := newCF(st, runs, notifier)
+	for range 3 {
+		detector.detect(context.Background(), cfRepoRow(), f)
 	}
-	if len(st.upserts) != 0 {
-		t.Fatalf("a permanent refusal must not advance the counter, upserts=%d", len(st.upserts))
+	if len(runs.calls) != 3 || len(st.records) != 0 || len(st.upserts) != 0 || len(f.notes) != 0 || len(notifier.calls) != 0 {
+		t.Fatalf("refusal must retry silently: calls=%d records=%d attempts=%d notes=%d notifications=%d", len(runs.calls), len(st.records), len(st.upserts), len(f.notes), len(notifier.calls))
 	}
-	if len(f.notes) != 0 || len(notifier.calls) != 0 {
-		t.Fatalf("a permanent refusal must not comment/notify: notes=%d notifs=%d", len(f.notes), len(notifier.calls))
+	runs.err = nil
+	for range 3 {
+		detector.detect(context.Background(), cfRepoRow(), f)
 	}
-	if len(st.records) != 1 || st.records[0].LastPipelineID.Int64 != 9001 {
-		t.Fatalf("expected a silent RecordCIAutofixPipeline of 9001, got %+v", st.records)
+	if len(runs.calls) != 4 || len(st.upserts) != 1 || len(f.notes) != 1 || st.attempts[cfRef].AttemptCount != 1 {
+		t.Fatalf("recovery must dispatch exactly once: calls=%d attempts=%d notes=%d", len(runs.calls), len(st.upserts), len(f.notes))
 	}
 }
 

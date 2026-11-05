@@ -963,7 +963,9 @@ func TestStaleTipGoneAfterLockLostLiveDB(t *testing.T) {
 		t.Fatalf("record after instance 2 = {state %q last_error %v}, want deleted with no note", before.State, before.LastError)
 	}
 	close(resume)
-	<-done
+	if err := <-done; err != nil {
+		t.Fatalf("stale tip-gone reconciliation: %v", err)
+	}
 	f.svc1.retentionHooks = nil
 	after := f.row(t)
 	if after.LastError.Valid || !after.UpdatedAt.Time.Equal(before.UpdatedAt.Time) {

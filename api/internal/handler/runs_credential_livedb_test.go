@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -441,5 +442,36 @@ func assertNoRun(ctx context.Context, t *testing.T, f startRunGuardFixture, repo
 	t.Helper()
 	if n := f.runCount(ctx, t, repoID); n != 0 {
 		t.Errorf("a refused override must not create a run, found %d run rows", n)
+	}
+}
+
+func TestCreateRunConflictingCredentialSelectionsLiveDB(t *testing.T) {
+	ctx := context.Background()
+	f := newStartRunGuardFixture(ctx, t)
+	repo := f.seedEnabledRepoWithIssue(ctx, t, 5299, 7, protClean)
+	var forgeCalls atomic.Int64
+	f.forge.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forgeCalls.Add(1)
+		http.Error(w, "unexpected forge call", http.StatusInternalServerError)
+	})
+	for _, source := range []map[string]any{
+		{"kind": "worker_host"},
+		{"kind": "worker_host", "source_id": uuid.NewString(), "source_revision": 1},
+	} {
+		for _, mode := range []string{"inherit", "auto", "default", "pinned"} {
+			w := f.createRunWithOverride(t, repo, map[string]any{"issue_iid": 7, "codex_credential_source": source, "credential_override": map[string]any{"mode": mode}})
+			var body struct {
+				Reason string `json:"reason"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != http.StatusBadRequest || body.Reason != "credential_selection_conflict" {
+				t.Fatalf("mode %s: status=%d body=%s", mode, w.Code, w.Body.String())
+			}
+		}
+	}
+	if forgeCalls.Load() != 0 || f.runCount(ctx, t, repo) != 0 {
+		t.Fatal("conflicting selection caused forge or run writes")
 	}
 }
