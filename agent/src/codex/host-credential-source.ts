@@ -446,12 +446,12 @@ class Source implements HostCodexCredentialSource {
     const fence = this.fence();
     if (fence !== undefined) {
       if (this.refreshDigest(login, fence.salt) === fence.digest) relogin();
-      const lock = path.join(this.home, REFRESH_LOCK_FILE);
-      if (!createLock(lock, currentLockOwner(), this.now())) unavailable();
+      const unlock = this.tryLock();
+      if (!unlock) removeLockManually();
       try {
         return this.reconcile(this.current().login);
       } finally {
-        fs.unlinkSync(lock);
+        unlock();
       }
     }
     this.accept(login);
@@ -573,10 +573,9 @@ class Source implements HostCodexCredentialSource {
 
   // The sidecar lock is the cross-process custody boundary. It serializes this
   // dedicated directory while safely reclaiming locks whose recorded owner is dead.
-  private async lock(): Promise<() => void> {
+  private tryLock(): (() => void) | undefined {
     const file = path.join(this.home, REFRESH_LOCK_FILE);
     const owner = currentLockOwner();
-    const deadline = Date.now() + this.lockTimeoutMs;
     for (;;) {
       if (createLock(file, owner, this.now())) {
         heldRefreshLocks.add(file);
@@ -611,9 +610,16 @@ class Source implements HostCodexCredentialSource {
         } catch {}
         continue;
       }
-      if (Date.now() >= deadline) {
-        removeLockManually();
-      }
+      return undefined;
+    }
+  }
+
+  private async lock(): Promise<() => void> {
+    const deadline = Date.now() + this.lockTimeoutMs;
+    for (;;) {
+      const unlock = this.tryLock();
+      if (unlock) return unlock;
+      if (Date.now() >= deadline) removeLockManually();
       await sleep(Math.min(25, Math.max(1, deadline - Date.now())));
     }
   }

@@ -522,19 +522,80 @@ test("uncertain exchanges stay fenced across source restart until refresh materi
   }
 });
 
-test("a process exit during exchange leaves a restart-safe fence", t => {
-  const f = fixture(t);
-  const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
-    import { openHostCodexCredentialSource } from './src/codex/host-credential-source.ts';
-    const source = openHostCodexCredentialSource(process.argv[1], process.argv[2], {
-      fetch: async () => process.exit(0),
-    });
-    await source.refresh();
-  `, f.home, f.state], { cwd: process.cwd(), encoding: "utf8" });
-  assert.equal(child.status, 0, child.stderr);
-  assert.throws(() => openHostCodexCredentialSource(f.home, f.state), closed);
-  assert.equal(fs.readFileSync(f.auth, "utf8"), auth());
-  assert.equal(fs.existsSync(path.join(f.home, "uzi-refresh-uncertain.json")), true);
+test("a process exit during exchange recovers replacement material only under a safe lock", async t => {
+  for (const mode of ["reopen", "ready"]) {
+    for (const owner of ["dead", "live", "foreign", "namespace", "unverifiable", "symlink"]) {
+      await t.test(`${mode}/${owner}`, async t => {
+        const f = fixture(t);
+        let calls = 0;
+        const fetch: HostFetch = async () => {
+          calls++;
+          throw new Error("recovery must not replay a refresh");
+        };
+        const source = openHostCodexCredentialSource(f.home, f.state, { fetch });
+        const revision = source.sourceRevision;
+        const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+          import { openHostCodexCredentialSource } from './src/codex/host-credential-source.ts';
+          const source = openHostCodexCredentialSource(process.argv[1], process.argv[2], {
+            fetch: async () => process.exit(0),
+          });
+          await source.refresh();
+        `, f.home, f.state], { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 });
+        assert.equal(child.status, 0, child.stderr);
+        const lock = path.join(f.home, "uzi-refresh.lock");
+        const fence = path.join(f.home, "uzi-refresh-uncertain.json");
+        assert.equal(fs.existsSync(fence), true);
+        assert.equal(source.ready(), false);
+        assert.throws(() => openHostCodexCredentialSource(f.home, f.state, { fetch }),
+          (error: unknown) => error instanceof HostCredentialSourceError && error.reason === "needs_relogin");
+        if (owner === "live") fs.writeFileSync(lock, lockRecord(process.ppid));
+        if (owner === "foreign") {
+          const record = JSON.parse(lockRecord(process.ppid));
+          record.owner = "foreign-owner";
+          fs.writeFileSync(lock, JSON.stringify(record));
+        }
+        if (owner === "namespace") fs.writeFileSync(lock, lockRecord(process.ppid, "pid:[foreign]"));
+        if (owner === "unverifiable") fs.writeFileSync(lock, "{}");
+        if (owner === "symlink") {
+          fs.unlinkSync(lock);
+          fs.symlinkSync(f.auth, lock);
+        }
+        const before = fs.lstatSync(lock);
+        const content = fs.readFileSync(lock);
+        fs.writeFileSync(f.auth, auth("SENTINEL-REPLACEMENT-ACCESS", "SENTINEL-REPLACEMENT-REFRESH"));
+        const recoverable = owner === "dead" && hasPidNamespace;
+        if (recoverable) {
+          const recovered = mode === "reopen" ? openHostCodexCredentialSource(f.home, f.state, { fetch }) : source;
+          assert.equal(recovered.ready(), true);
+          assert.equal(recovered.sourceRevision, revision + 1);
+          assert.equal(recovered.read().refreshToken, "SENTINEL-REPLACEMENT-REFRESH");
+          assert.equal((await recovered.release()).accessToken, "SENTINEL-REPLACEMENT-ACCESS");
+          assert.equal(fs.existsSync(lock), false);
+          assert.equal(fs.existsSync(fence), false);
+        } else {
+          if (mode === "reopen") {
+            assert.throws(() => openHostCodexCredentialSource(f.home, f.state, { fetch }),
+              owner === "symlink" ? HostCredentialSourceError : manualRemoval);
+          } else {
+            assert.equal(source.ready(), false);
+            assert.throws(() => source.read(), owner === "symlink" ? HostCredentialSourceError : manualRemoval);
+          }
+          const after = fs.lstatSync(lock);
+          assert.equal(after.ino, before.ino);
+          assert.equal(after.isSymbolicLink(), before.isSymbolicLink());
+          if (owner !== "symlink") assert.deepEqual(fs.readFileSync(lock), content);
+          assert.equal(fs.existsSync(fence), true);
+          assert.equal(source.sourceRevision, revision);
+          fs.unlinkSync(lock);
+          const recovered = openHostCodexCredentialSource(f.home, f.state, { fetch });
+          assert.equal(recovered.ready(), true);
+          assert.equal(recovered.sourceRevision, revision + 1);
+          assert.equal(fs.existsSync(fence), false);
+        }
+        assert.equal(calls, 0);
+      });
+    }
+  }
 });
 
 test("a refresh cannot reach the provider when its uncertainty fence cannot be persisted", async t => {
