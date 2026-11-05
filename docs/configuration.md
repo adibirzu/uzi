@@ -547,6 +547,11 @@ Set on the `agent` compose service (profile `agent`) or on a standalone `docker 
 | `UZI_GEMINI_CREDENTIAL_SOURCE` | disabled | Gemini host-login custody mode. Empty/unset disables Gemini; only `worker_host` is accepted (there is no server-held Gemini credential or fallback). |
 | `UZI_GEMINI_HOST_HOME` | — (required for `worker_host`) | Absolute path to the dedicated Gemini login directory. It must be a real, worker-owned `0700` directory; the worker only validates its metadata and never reads files inside it. |
 | `UZI_GEMINI_CLI` | — (required for `worker_host`) | Absolute path to the Gemini CLI. It must be an owner- or root-owned, non-group/world-writable regular executable file before the worker advertises `gemini_host_login_v1`; point it at the resolved executable target, not an npm global-install symlink. |
+| `UZI_GROK_CREDENTIAL_SOURCE` | disabled | Grok host-login custody mode. Empty/unset disables Grok; only `worker_host` is accepted (there is no server-held Grok credential, API-key path, or fallback). |
+| `UZI_GROK_HOST_HOME` | — (required for `worker_host`) | Absolute path to the dedicated Grok login directory. It must be a real, worker-owned `0700` directory; the worker only validates its metadata and never reads files inside it. |
+| `UZI_GROK_CLI` | — (required for `worker_host`) | Absolute path to the Grok CLI. It must be an owner- or root-owned, non-group/world-writable regular executable file before the worker advertises `grok_host_login_v1`; point it at the resolved executable target, not a symlink. |
+| `UZI_GROK_ROLES` | `reviewer,cross_check` | Comma-separated unique subset of `reviewer,cross_check`; blank/unset uses the default and `author` is always rejected. This is parsed now and will be enforced by the later Grok harness. |
+| `UZI_GROK_DAILY_CALL_BUDGET` | `20` | Strict integer from `0` through `200`; blank/unset uses the default and `0` disables Grok calls. This is parsed now and will be enforced by the later Grok harness. |
 | `UZI_STUB_PLAN_GATE` | `false` | Only meaningful with `UZI_EXECUTOR=stub`: makes the stub drive the M4 plan-approval gate before committing, instead of committing immediately. Test/harness use only. |
 | `WORKER_HEARTBEAT_INTERVAL` | `15s` | How often the worker posts a heartbeat. |
 | `WORKER_POLL_INTERVAL` | `3s` | How often an idle worker asks the server for a run to claim. |
@@ -568,6 +573,20 @@ Set on the `agent` compose service (profile `agent`) or on a standalone `docker 
 | `UZI_LOG_LEVEL` | `info` | Worker log verbosity: `debug`/`info`/`warn`/`error`. At `debug` the worker also writes every raw run event (each `tool_use`, `tool_result`, status, etc.) to its stdout as it is emitted, so `docker logs uzi-agent-1` becomes the full-frame debug surface. Secrets are redacted before logging. `info` stays terse (no per-event lines). |
 
 Duration values accept the same Go-style strings used server-side (`15s`, `3s`, `500ms`, `2h`) or a bare integer read as milliseconds.
+
+### Grok host-only custody
+
+Grok follows the metadata-only `worker_host` boundary and is reviewer/cross-check
+only; it has no server credential or API-key fallback and this foundation does
+not execute Grok turns. A configured source must pass its local readiness check
+at worker startup or the worker refuses to start. Registration advertises only
+opaque `grok_host_login_v1` metadata; the later harness must revalidate the
+boundary immediately before use.
+
+The verified Grok CLI behaviour that bounds the later harness (home and
+`GROK_HOME` handling, unauthenticated output, environment scrubbing) is recorded
+in `adr/3751-host-held-codex-login.md`; turn execution was not tested in this
+foundation.
 
 ### Worker Go concurrency defaults
 

@@ -47,6 +47,14 @@ export type GeminiCredentialSource =
   | { kind: "worker_host"; home: string; cli: string }
   | undefined;
 
+/** Grok is host-login only: no server-held credential or API-key fallback exists. */
+export type GrokCredentialSource =
+  | { kind: "worker_host"; home: string; cli: string }
+  | undefined;
+
+/** Grok is advice-only by policy; authoring is never a valid configuration. */
+export type GrokRole = "reviewer" | "cross_check";
+
 export interface Config {
   recoveryDecodedLimitBytes: number;
   apiUrl: string;
@@ -282,6 +290,14 @@ export interface Config {
   geminiCredentialSource: GeminiCredentialSource;
   /** Local-only Gemini host-login readiness hook; never serialized or model-reachable. */
   geminiHostReadiness?: () => boolean;
+  /** Explicit Grok host-login custody; absent means Grok is disabled. */
+  grokCredentialSource: GrokCredentialSource;
+  /** Local-only Grok host-login readiness hook; never serialized or model-reachable. */
+  grokHostReadiness?: () => boolean;
+  /** Advice-only Grok roles, parsed now and enforced by the future harness. */
+  grokRoles: readonly GrokRole[];
+  /** Per-worker daily Grok call limit, parsed now and enforced by the future harness. */
+  grokDailyCallBudget: number;
   /** Non-secret registration metadata populated only after host custody preflight. */
   codexHostSource?: { sourceId: string; sourceRevision: number; ready: boolean };
   /** Local-only revalidation hook; never serialized and never invoked by model code. */
@@ -553,6 +569,45 @@ function parseGeminiCredentialSource(env: NodeJS.ProcessEnv): GeminiCredentialSo
   return { kind: "worker_host", home: path.resolve(home), cli: path.resolve(cli) };
 }
 
+/** Parse Grok's host-only custody switch; it has neither server nor API-key fallback. */
+function parseGrokCredentialSource(env: NodeJS.ProcessEnv): GrokCredentialSource {
+  const source = env.UZI_GROK_CREDENTIAL_SOURCE?.trim().toLowerCase();
+  if (source === undefined || source === "") return undefined;
+  if (source !== "worker_host") {
+    throw new Error(`invalid UZI_GROK_CREDENTIAL_SOURCE ${JSON.stringify(env.UZI_GROK_CREDENTIAL_SOURCE)} (expected "worker_host")`);
+  }
+  const home = env.UZI_GROK_HOST_HOME?.trim();
+  if (!home || !path.isAbsolute(home)) {
+    throw new Error("invalid UZI_GROK_HOST_HOME (must be an absolute path when UZI_GROK_CREDENTIAL_SOURCE=worker_host)");
+  }
+  const cli = env.UZI_GROK_CLI?.trim();
+  if (!cli || !path.isAbsolute(cli)) {
+    throw new Error("invalid UZI_GROK_CLI (must be an absolute path when UZI_GROK_CREDENTIAL_SOURCE=worker_host)");
+  }
+  return { kind: "worker_host", home: path.resolve(home), cli: path.resolve(cli) };
+}
+
+function parseGrokRoles(value: string | undefined): GrokRole[] {
+  const raw = value?.trim() || "reviewer,cross_check";
+  const roles = raw.split(",").map(role => role.trim());
+  if (roles.some(role => role !== "reviewer" && role !== "cross_check") || new Set(roles).size !== roles.length) {
+    throw new Error("invalid UZI_GROK_ROLES (expected a unique comma-separated subset of reviewer,cross_check)");
+  }
+  return roles as GrokRole[];
+}
+
+function parseGrokDailyCallBudget(value: string | undefined): number {
+  const raw = value?.trim() || "20";
+  if (!/^(?:0|[1-9][0-9]*)$/.test(raw)) {
+    throw new Error("invalid UZI_GROK_DAILY_CALL_BUDGET (expected an integer in the range 0..200)");
+  }
+  const budget = Number(raw);
+  if (budget > 200) {
+    throw new Error("invalid UZI_GROK_DAILY_CALL_BUDGET (expected an integer in the range 0..200)");
+  }
+  return budget;
+}
+
 /** Default per-run command-cache rotation threshold (4 GiB). */
 const DEFAULT_CODEX_COMMAND_CACHE_RUN_BYTES = 4294967296;
 
@@ -753,6 +808,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     codexCommandSandbox: parseCommandSandbox(env.UZI_CODEX_COMMAND_SANDBOX),
     codexCredentialSource: parseCodexCredentialSource(env),
     geminiCredentialSource: parseGeminiCredentialSource(env),
+    grokCredentialSource: parseGrokCredentialSource(env),
+    grokRoles: parseGrokRoles(env.UZI_GROK_ROLES),
+    grokDailyCallBudget: parseGrokDailyCallBudget(env.UZI_GROK_DAILY_CALL_BUDGET),
     codexCommandCacheRunBytes: parseCacheRunBytes(env.UZI_CODEX_COMMAND_CACHE_RUN_BYTES),
     // Populated by main.ts after the async receipt + Landlock probes; the sync parse
     // cannot probe, so the default is "do not advertise" until startup resolves it.
