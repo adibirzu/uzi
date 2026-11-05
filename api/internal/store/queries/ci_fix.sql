@@ -101,15 +101,27 @@ SELECT EXISTS (
       AND status NOT IN ('completed', 'failed', 'cancelled')
 ) AS active;
 
--- name: HasWorkerHostCodexRunForBranch :one
-SELECT COALESCE((
-    SELECT codex_credential_source_kind = 'worker_host'
+-- name: GetCIFixBranchEligibility :one
+WITH matching AS (
+    SELECT codex_credential_source_kind, status, created_at, id
     FROM runs
     WHERE repo_id = @repo_id::uuid
-      AND branch = @branch
+      AND (branch = @branch OR (
+          kind = 'issue' AND branch IS NULL
+          AND 'agent/issue-' || issue_iid::text = @branch
+      ))
+)
+SELECT COALESCE((
+    SELECT codex_credential_source_kind = 'worker_host'
+    FROM matching
     ORDER BY created_at DESC, id DESC
     LIMIT 1
-), false)::boolean AS host_bound;
+), false)::boolean AS host_bound,
+EXISTS (
+    SELECT 1 FROM matching
+    WHERE status NOT IN ('completed', 'failed', 'cancelled')
+)::boolean AS active;
+
 
 -- name: FindCIFixStampTarget :one
 -- Verification stamp-target selection (PRD #6). The ci_fix run whose fix branch is

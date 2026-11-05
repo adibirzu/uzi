@@ -85,7 +85,9 @@ Derived runs ultimately inherit the same bound worker, source ID, and revision.
 Until that handoff is implemented, M1 rejects every child or successor of a
 host-bound run with a typed unsupported-derived-run reason before credential
 resolution; it never substitutes a server Codex or Claude credential. CI fixes
-identify the current source as the newest run recorded on the failed branch;
+identify the current source as the newest matching run, including an issue run
+at its deterministic branch before terminal publication. Source custody and active
+occupancy are read from one snapshot after acquiring the branch lock;
 an older host-bound run does not permanently exclude a reused branch.
 
 API-host meters, source-aware parking/cooldown admission, and native-host/UID-split deployment are separate milestones. The M1 bridge does not call

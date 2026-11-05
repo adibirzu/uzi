@@ -575,7 +575,7 @@ type Store interface {
 	CountActiveRunsWithBranch(ctx context.Context, arg store.CountActiveRunsWithBranchParams) (int64, error)
 	CountActiveBranchRunsForRef(ctx context.Context, arg store.CountActiveBranchRunsForRefParams) (int64, error)
 	HasActiveIssueRunForIID(ctx context.Context, arg store.HasActiveIssueRunForIIDParams) (bool, error)
-	HasWorkerHostCodexRunForBranch(ctx context.Context, arg store.HasWorkerHostCodexRunForBranchParams) (bool, error)
+	GetCIFixBranchEligibility(ctx context.Context, arg store.GetCIFixBranchEligibilityParams) (store.GetCIFixBranchEligibilityRow, error)
 	// LockRunBranch takes the per-(repo, branch) advisory lock that serializes issue /
 	// mr_rework / ci_fix creation on one agent branch (issue #1626, store.RunBranchLockClass).
 	LockRunBranch(ctx context.Context, repoID uuid.UUID, branch string) error

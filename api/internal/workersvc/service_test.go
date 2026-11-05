@@ -581,7 +581,7 @@ type fakeStore struct {
 	activeBranchRuns       int64 // CountActiveRunsWithBranch
 	activeBranchRefRuns    int64 // CountActiveBranchRunsForRef
 	activeIssueRunForIID   bool  // HasActiveIssueRunForIID
-	hostCodexRunForBranch  bool  // HasWorkerHostCodexRunForBranch
+	hostCodexRunForBranch  bool
 
 	// Create worker.
 	createWorkerResult store.Worker
@@ -1838,8 +1838,12 @@ func (f *fakeStore) HasActiveIssueRunForIID(context.Context, store.HasActiveIssu
 	return f.activeIssueRunForIID, nil
 }
 
-func (f *fakeStore) HasWorkerHostCodexRunForBranch(context.Context, store.HasWorkerHostCodexRunForBranchParams) (bool, error) {
-	return f.hostCodexRunForBranch, nil
+func (f *fakeStore) GetCIFixBranchEligibility(_ context.Context, arg store.GetCIFixBranchEligibilityParams) (store.GetCIFixBranchEligibilityRow, error) {
+	_, issueBranch := issueIIDFromAgentBranch(arg.Branch.String)
+	return store.GetCIFixBranchEligibilityRow{
+		HostBound: f.hostCodexRunForBranch,
+		Active:    f.activeBranchRuns > 0 || (issueBranch && f.activeIssueRunForIID),
+	}, nil
 }
 
 // LockRunBranch is a no-op: the in-memory fake has no transaction to serialize (issue #1626).

@@ -9,7 +9,7 @@ import (
 	"github.com/vtmocanu/uzi/api/internal/store"
 )
 
-func TestHasWorkerHostCodexRunForBranchLiveDB(t *testing.T) {
+func TestCIFixBranchEligibilityLiveDB(t *testing.T) {
 	ctx, q, pool := autoEligPool(t)
 	user := seedBareUser(ctx, t, pool)
 	conn := uuid.New()
@@ -41,13 +41,13 @@ func TestHasWorkerHostCodexRunForBranchLiveDB(t *testing.T) {
 
 	has := func(repo uuid.UUID, branch string) bool {
 		t.Helper()
-		got, err := q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{
+		got, err := q.GetCIFixBranchEligibility(ctx, store.GetCIFixBranchEligibilityParams{
 			RepoID: repo, Branch: pgtype.Text{String: branch, Valid: true},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		return got
+		return got.HostBound
 	}
 	if has(repo, branch) {
 		t.Fatal("server-credential run matched worker-host guard")
@@ -72,4 +72,33 @@ func TestHasWorkerHostCodexRunForBranchLiveDB(t *testing.T) {
 	if !has(repo, branch) {
 		t.Fatal("current host-backed source run was not refused after branch reuse")
 	}
+	mustExec(ctx, t, pool, `UPDATE runs SET status='completed' WHERE repo_id=$1`, repo)
+	publishing := uuid.New()
+	mustExec(ctx, t, pool, `INSERT INTO runs (id,user_id,repo_id,kind,issue_iid,issue_title,issue_description,status,harness,
+		codex_credential_source_kind,codex_credential_source_id,codex_credential_source_revision,codex_credential_source_worker_id,created_at)
+		VALUES ($1,$2,$3,'issue',42,'publishing','d','running','codex','worker_host',$4,1,$5,now()+interval '2 days')`,
+		publishing, user, repo, uuid.NewString(), uuid.New())
+	eligibility := func(ref string, host, active bool) {
+		t.Helper()
+		got, err := q.GetCIFixBranchEligibility(ctx, store.GetCIFixBranchEligibilityParams{
+			RepoID: repo, Branch: pgtype.Text{String: ref, Valid: true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.HostBound != host || got.Active != active {
+			t.Fatalf("ref=%s eligibility=%+v, want host=%t active=%t", ref, got, host, active)
+		}
+	}
+	eligibility(branch, true, true)
+	eligibility("agent/issue-042", false, false)
+	mustExec(ctx, t, pool, `UPDATE runs SET status='completed',branch=$2 WHERE id=$1`, publishing, branch)
+	eligibility(branch, true, false)
+	serverPublishing := uuid.New()
+	mustExec(ctx, t, pool, `INSERT INTO runs (id,user_id,repo_id,kind,issue_iid,issue_title,issue_description,status,harness,created_at)
+		VALUES ($1,$2,$3,'issue',42,'replacement','d','running','claude',now()+interval '3 days')`, serverPublishing, user, repo)
+	eligibility(branch, false, true)
+	mustExec(ctx, t, pool, `UPDATE runs SET status='completed',branch=$2 WHERE id=$1`, serverPublishing, branch)
+	eligibility(branch, false, false)
+
 }

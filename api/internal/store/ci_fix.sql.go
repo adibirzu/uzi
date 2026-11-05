@@ -640,6 +640,45 @@ func (q *Queries) FindCIFixStampTarget(ctx context.Context, arg FindCIFixStampTa
 	return i, err
 }
 
+const getCIFixBranchEligibility = `-- name: GetCIFixBranchEligibility :one
+WITH matching AS (
+    SELECT codex_credential_source_kind, status, created_at, id
+    FROM runs
+    WHERE repo_id = $1::uuid
+      AND (branch = $2 OR (
+          kind = 'issue' AND branch IS NULL
+          AND 'agent/issue-' || issue_iid::text = $2
+      ))
+)
+SELECT COALESCE((
+    SELECT codex_credential_source_kind = 'worker_host'
+    FROM matching
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+), false)::boolean AS host_bound,
+EXISTS (
+    SELECT 1 FROM matching
+    WHERE status NOT IN ('completed', 'failed', 'cancelled')
+)::boolean AS active
+`
+
+type GetCIFixBranchEligibilityParams struct {
+	RepoID uuid.UUID   `json:"repo_id"`
+	Branch pgtype.Text `json:"branch"`
+}
+
+type GetCIFixBranchEligibilityRow struct {
+	HostBound bool `json:"host_bound"`
+	Active    bool `json:"active"`
+}
+
+func (q *Queries) GetCIFixBranchEligibility(ctx context.Context, arg GetCIFixBranchEligibilityParams) (GetCIFixBranchEligibilityRow, error) {
+	row := q.db.QueryRow(ctx, getCIFixBranchEligibility, arg.RepoID, arg.Branch)
+	var i GetCIFixBranchEligibilityRow
+	err := row.Scan(&i.HostBound, &i.Active)
+	return i, err
+}
+
 const hasActiveIssueRunForIID = `-- name: HasActiveIssueRunForIID :one
 SELECT EXISTS (
     SELECT 1 FROM runs
@@ -663,29 +702,6 @@ func (q *Queries) HasActiveIssueRunForIID(ctx context.Context, arg HasActiveIssu
 	var active bool
 	err := row.Scan(&active)
 	return active, err
-}
-
-const hasWorkerHostCodexRunForBranch = `-- name: HasWorkerHostCodexRunForBranch :one
-SELECT COALESCE((
-    SELECT codex_credential_source_kind = 'worker_host'
-    FROM runs
-    WHERE repo_id = $1::uuid
-      AND branch = $2
-    ORDER BY created_at DESC, id DESC
-    LIMIT 1
-), false)::boolean AS host_bound
-`
-
-type HasWorkerHostCodexRunForBranchParams struct {
-	RepoID uuid.UUID   `json:"repo_id"`
-	Branch pgtype.Text `json:"branch"`
-}
-
-func (q *Queries) HasWorkerHostCodexRunForBranch(ctx context.Context, arg HasWorkerHostCodexRunForBranchParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasWorkerHostCodexRunForBranch, arg.RepoID, arg.Branch)
-	var host_bound bool
-	err := row.Scan(&host_bound)
-	return host_bound, err
 }
 
 const stampFixVerdict = `-- name: StampFixVerdict :execrows

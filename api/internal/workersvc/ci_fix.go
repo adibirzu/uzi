@@ -180,16 +180,15 @@ func (s *Service) createCIFixRun(ctx context.Context, userID, repoID uuid.UUID, 
 	if err := s.guardDefaultBranch(ctx, row); err != nil {
 		return store.Run{}, err
 	}
-	// A CI fix is derived work for the failed branch. Worker-host Codex credentials
-	// belong solely to their bound worker, so never re-resolve this as a server-held
-	// credential. This read is repeated in the create transaction below to close the
-	// branch-link race.
-	hostBound, err := s.q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}})
+	eligibility, err := s.q.GetCIFixBranchEligibility(ctx, store.GetCIFixBranchEligibilityParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}})
 	if err != nil {
 		return store.Run{}, err
 	}
-	if hostBound {
+	if eligibility.HostBound {
 		return store.Run{}, ErrHostCodexDerivedRunUnsupported
+	}
+	if eligibility.Active {
+		return store.Run{}, ErrBranchInUse
 	}
 
 	snapJSON, err := json.Marshal(snapshot)
@@ -202,48 +201,18 @@ func (s *Service) createCIFixRun(ctx context.Context, userID, repoID uuid.UUID, 
 	// PRD #1429 M2: CI-fix has no reliable target run, so it uses IMPLICIT D11 (nil explicit) — the
 	// resolve + freeze commit atomically with the INSERT.
 	run, err := s.createRunResolved(ctx, userID, nil /*explicit: implicit D11*/, func(q Store, resolved resolvedHarness) (store.Run, error) {
-		hostBound, err := q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}})
-		if err != nil {
-			return store.Run{}, err
-		}
-		if hostBound {
-			return store.Run{}, ErrHostCodexDerivedRunUnsupported
-		}
-		// Cross-kind same-branch exclusion (PRD #6, issue #1626), inside the create transaction
-		// and after the run-branch lock, so it serializes against an issue / mr_rework create on
-		// the same ref (they take the same (repo, ref) key; see store.RunBranchLockClass). The
-		// waiter's checks are new READ COMMITTED statements and see the holder's committed row.
 		if err := q.LockRunBranch(ctx, repoID, ref); err != nil {
 			return store.Run{}, err
 		}
-		// Any ref: refuse a fix on a ref an active run already holds as runs.branch (a task
-		// run's branch). The uq_runs_one_active_ci_fix index cannot express this.
-		active, err := q.CountActiveRunsWithBranch(ctx, store.CountActiveRunsWithBranchParams{
-			RepoID: repoID,
-			Branch: pgtype.Text{String: ref, Valid: true},
-		})
+		eligibility, err := q.GetCIFixBranchEligibility(ctx, store.GetCIFixBranchEligibilityParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}})
 		if err != nil {
 			return store.Run{}, err
 		}
-		if active > 0 {
-			return store.Run{}, ErrBranchInUse
+		if eligibility.HostBound {
+			return store.Run{}, ErrHostCodexDerivedRunUnsupported
 		}
-		// An agent branch: an active issue run for N is working agent/issue-N, and its
-		// runs.branch stays NULL until its terminal report, so only issue_iid can see it.
-		// A non-canonical ref (agent/issue-007) is not mapped; see issueIIDFromAgentBranch.
-		//
-		// Known and accepted: the ci-autofix poller treats ErrBranchInUse as a race and records
-		// the pipeline as seen (poller/ci_autofix.go), so a failed pipeline refused here while
-		// the issue run is active is not retried for that pipeline id; the next failing
-		// pipeline on the branch is a fresh candidate.
-		if iid, ok := issueIIDFromAgentBranch(ref); ok {
-			busy, err := q.HasActiveIssueRunForIID(ctx, store.HasActiveIssueRunForIIDParams{RepoID: repoID, IssueIid: iid})
-			if err != nil {
-				return store.Run{}, err
-			}
-			if busy {
-				return store.Run{}, ErrBranchInUse
-			}
+		if eligibility.Active {
+			return store.Run{}, ErrBranchInUse
 		}
 		return q.CreateCIFixRun(ctx, store.CreateCIFixRunParams{
 			UserID:           userID,
