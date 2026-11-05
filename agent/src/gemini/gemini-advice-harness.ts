@@ -169,7 +169,8 @@ export class GeminiAdviceHarness implements AdviceHarness {
         if (killTimer) clearTimeout(killTimer);
         if (settleTimer) clearTimeout(settleTimer);
         request.signal.removeEventListener("abort", abort);
-        value instanceof Error ? reject(value) : resolve(value);
+        if (value instanceof Error) reject(value);
+        else resolve(value);
       };
       const stop = (category: HarnessError["category"], message: string): void => {
         if (stopping || settled) return;
