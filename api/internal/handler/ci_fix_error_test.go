@@ -9,18 +9,30 @@ import (
 	"github.com/vtmocanu/uzi/api/internal/workersvc"
 )
 
-func TestWriteCIFixCreateErrorHostCodexSourceUnavailable(t *testing.T) {
-	rec := httptest.NewRecorder()
-	writeCIFixCreateError(rec, workersvc.ErrHostCodexSourceUnavailable)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+func TestWriteCIFixCreateErrorHostCodexRefusals(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{"source unavailable", workersvc.ErrHostCodexSourceUnavailable, "host_codex_source_unavailable"},
+		{"derived run unsupported", workersvc.ErrHostCodexDerivedRunUnsupported, "host_codex_derived_run_unsupported"},
 	}
-	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body["reason"] != "host_codex_source_unavailable" {
-		t.Fatalf("reason = %v, want host_codex_source_unavailable", body["reason"])
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeCIFixCreateError(rec, tt.err)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["reason"] != tt.reason {
+				t.Fatalf("reason = %v, want %s", body["reason"], tt.reason)
+			}
+		})
 	}
 }
 
