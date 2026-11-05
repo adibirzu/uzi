@@ -98,3 +98,12 @@ the Gemini advice harness (one-shot, tool-less passes via `agy`) revalidates the
 The login is HOME-scoped: an operator runs `HOME="$UZI_GEMINI_HOST_HOME" agy`
 and signs in before starting the worker. It remains an open question whether agy
 also stores tokens in the macOS keychain shared across HOME directories.
+
+Against the installed agy 1.5.1 CLI, the advice argv was verified to parse with
+`--print=`, stream-json input/output, an effort-suffixed model, `--sandbox`, and
+`--disable-slash-commands`; it deliberately never uses `--mode plan`. An
+unauthenticated probe verified the terminal `event: "result"` object shape and
+its authentication failure diagnostics. Signed-in success status spelling,
+streaming delta event shapes, and HOME-versus-keychain credential behavior remain
+unverified; the parser tolerates unknown delta events and treats the final result
+response as authoritative.

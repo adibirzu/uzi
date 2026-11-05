@@ -4,9 +4,11 @@
  * documents one message per line; this adapter sends exactly the assumed
  * user-message envelope: `{ type: "user", content: "<system>\n\n<prompt>" }`.
  *
- * agy's output protocol has evolved. We use a string `result` on a final
- * event when present; otherwise we concatenate assistant delta strings. Other
- * events (including user/tool echoes) are deliberately ignored.
+ * agy's output protocol has evolved. agy 1.5.1 emits its terminal answer as
+ * `{ event: "result", result: { status, response, error, usage, ... } }`.
+ * Older string-result frames remain tolerated; otherwise we concatenate
+ * assistant delta strings. Other events (including user/tool echoes) are
+ * deliberately ignored.
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,13 +16,13 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 
 import type { Config } from "../config.js";
-import type { AdviceHarness, AdviceRequest, AdviceResult, AdviceResultPolicy, HarnessError, HarnessTerminal } from "../harness.js";
+import type { AdviceHarness, AdviceRequest, AdviceResult, AdviceResultPolicy, HarnessError, HarnessTerminal, HarnessUsage } from "../harness.js";
 
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
-const DEFAULT_MODEL = "gemini-3.8-flash";
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const AUTH_DIAGNOSTIC = /not signed in|sign in|login required/i;
+const EFFORT_MODEL = /-(low|medium|high)$/;
+const AUTH_DIAGNOSTIC = /authentication required|authentication failed|not signed in|log in/i;
 
 export class GeminiAdviceError extends Error {
   readonly failure: HarnessError;
@@ -33,8 +35,8 @@ export class GeminiAdviceError extends Error {
 
 type GeminiConfig = Pick<Config, "geminiCredentialSource" | "geminiHostReadiness">;
 
-function modelFromEnv(env: NodeJS.ProcessEnv): string {
-  const model = env.UZI_GEMINI_MODEL === undefined ? DEFAULT_MODEL : env.UZI_GEMINI_MODEL;
+function modelFromEnv(env: NodeJS.ProcessEnv, requestEffort: AdviceRequest["effort"]): string {
+  const model = env.UZI_GEMINI_MODEL === undefined ? `gemini-3.8-flash-${effort(requestEffort)}` : env.UZI_GEMINI_MODEL;
   if (!MODEL.test(model)) throw new GeminiAdviceError("model", "UZI_GEMINI_MODEL must be a non-empty model identifier");
   return model;
 }
@@ -48,7 +50,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 function isFinalEvent(value: Record<string, unknown>): boolean {
-  return value.type === "result" || value.type === "final" || value.type === "complete" || value.done === true;
+  return value.event === "result" || value.type === "result" || value.type === "final" || value.type === "complete" || value.done === true;
 }
 
 function assistantDelta(value: Record<string, unknown>): string | undefined {
@@ -59,18 +61,41 @@ function assistantDelta(value: Record<string, unknown>): string | undefined {
 }
 
 function finalText(value: Record<string, unknown>): string | undefined {
-  return isFinalEvent(value) && typeof value.result === "string" ? value.result : undefined;
+  if (!isFinalEvent(value)) return undefined;
+  if (typeof value.result === "string") return value.result;
+  const result = record(value.result);
+  return typeof result?.response === "string" ? result.response : undefined;
 }
 
 function finalFailure(value: Record<string, unknown>): string | undefined {
-  if (!isFinalEvent(value) || value.is_error !== true) return undefined;
+  if (!isFinalEvent(value)) return undefined;
+  const result = record(value.result);
+  if (typeof result?.error === "string" && result.error.length > 0) return result.error;
+  if (result?.finished_reason === "error") return "Gemini reported an error result";
+  if (value.is_error !== true) return undefined;
   if (typeof value.subtype === "string") return value.subtype;
   if (typeof value.error === "string") return value.error;
   return "Gemini reported an error result";
 }
 
-function terminal(outcome: "success" | "failed", subtype: string, errors: readonly string[]): HarnessTerminal {
-  return { outcome, subtype, errors, metrics: { cost: { kind: "unreported" } } };
+function finalUsage(value: Record<string, unknown>): HarnessUsage | undefined {
+  const usage = record(record(value.result)?.usage);
+  if (!usage) return undefined;
+  const number = (key: string): number | undefined => typeof usage[key] === "number" && Number.isFinite(usage[key]) && usage[key] >= 0 ? usage[key] : undefined;
+  const input = number("input_tokens"); const output = number("output_tokens"); const cacheRead = number("cache_read_tokens");
+  if (input === undefined && output === undefined && cacheRead === undefined) return undefined;
+  return { basis: "call", tokens: { ...(input === undefined ? {} : { inputTotalTokens: input }), ...(output === undefined ? {} : { outputTokens: output }), ...(cacheRead === undefined ? {} : { inputCacheReadTokens: cacheRead }) }, wire: { usage } };
+}
+
+function finalStatusFailure(value: Record<string, unknown>): boolean {
+  const result = record(value.result);
+  if (!result) return false;
+  const status = typeof result.status === "string" ? result.status.toLowerCase() : "";
+  return status.length > 0 && status !== "success" && status !== "ok";
+}
+
+function terminal(outcome: "success" | "failed", subtype: string, errors: readonly string[], usage?: HarnessUsage): HarnessTerminal {
+  return { outcome, subtype, errors, metrics: { cost: { kind: "unreported" } }, ...(usage ? { usage } : {}) };
 }
 
 /** A host-held, tool-less Gemini pass. It deliberately has no run-executor surface. */
@@ -86,7 +111,7 @@ export class GeminiAdviceHarness implements AdviceHarness {
     if (source?.kind !== "worker_host" || !this.config.geminiHostReadiness?.()) {
       throw new GeminiAdviceError("authentication", "Gemini host login source is not ready");
     }
-    const model = request.model ?? modelFromEnv(this.env);
+    const model = request.model ?? modelFromEnv(this.env, request.effort);
     if (!MODEL.test(model)) throw new GeminiAdviceError("model", "Gemini model must be a non-empty model identifier");
     // agy's native JSON-schema enforcement has not been measured for this isolated
     // advice lane. Refuse rather than pretending an object parse enforces the schema.
@@ -95,7 +120,7 @@ export class GeminiAdviceHarness implements AdviceHarness {
     }
     const cwd = await mkdtemp(join(tmpdir(), "uzi-gemini-advice-"));
     try {
-      const args = ["--print=", "--input-format", "stream-json", "--output-format", "stream-json", `--model=${model}`, "--effort", effort(request.effort), "--mode", "plan", "--disable-slash-commands", "--sandbox"];
+      const args = ["--print=", "--input-format", "stream-json", "--output-format", "stream-json", `--model=${model}`, ...(EFFORT_MODEL.test(model) ? [] : ["--effort", effort(request.effort)]), "--sandbox", "--disable-slash-commands"];
       // This replacement env is intentionally a closed allowlist. Do not spread process.env.
       const childEnv: NodeJS.ProcessEnv = { HOME: source.home };
       for (const name of ["PATH", "LANG", "TZ", "TMPDIR"] as const) if (this.env[name] !== undefined) childEnv[name] = this.env[name];
@@ -122,6 +147,9 @@ export class GeminiAdviceHarness implements AdviceHarness {
       let final = false;
       let finalResult: string | undefined;
       let finalError: string | undefined;
+      let finalWasAuthError = false;
+      let usage: HarnessUsage | undefined;
+      let finalWasUnsuccessful = false;
       const deltas: string[] = [];
       let settled = false;
       let stopping = false;
@@ -179,6 +207,11 @@ export class GeminiAdviceHarness implements AdviceHarness {
         if (result !== undefined) finalResult = result;
         const failure = finalFailure(event);
         if (failure !== undefined) finalError = failure;
+        if (isFinalEvent(event)) {
+          usage = finalUsage(event) ?? usage;
+          finalWasUnsuccessful ||= finalStatusFailure(event);
+          finalWasAuthError ||= failure !== undefined && AUTH_DIAGNOSTIC.test(failure);
+        }
         const delta = assistantDelta(event);
         if (delta !== undefined) deltas.push(delta);
       };
@@ -208,14 +241,14 @@ export class GeminiAdviceHarness implements AdviceHarness {
           try { accept(stdout); } catch { return finish(new GeminiAdviceError("protocol", "Gemini emitted invalid stream-json")); }
         }
         if (pendingError) return finish(pendingError);
-        const auth = (!final || code !== 0) && AUTH_DIAGNOSTIC.test(`${stderr}\n${diagnostic}`);
-        if (auth) return finish({ text: finalResult ?? deltas.join(""), end: { kind: "terminal", terminal: terminal("failed", "authentication", ["Gemini host login needs re-login"]) } });
+        const auth = finalWasAuthError || AUTH_DIAGNOSTIC.test(`${stderr}\n${diagnostic}`);
+        if (auth) return finish({ text: finalResult ?? deltas.join(""), end: { kind: "terminal", terminal: terminal("failed", "authentication", ["Gemini host login needs re-login"], usage) }, usage });
         if (!final) return finish(new GeminiAdviceError("protocol", `Gemini CLI ended without a final result (exit ${code ?? "signal"})`));
         const text = finalResult ?? deltas.join("");
-        const end = finalError !== undefined
-          ? terminal("failed", "protocol", [finalError])
-          : code === 0 ? (text.trim() ? terminal("success", "success", []) : terminal("failed", "protocol", ["Gemini returned an empty answer"])) : terminal("failed", "protocol", [`Gemini CLI exited ${code ?? "by signal"}`]);
-        finish({ text, end: { kind: "terminal", terminal: end } });
+        const end = finalError !== undefined || finalWasUnsuccessful
+          ? terminal("failed", "protocol", [finalError ?? "Gemini reported an unsuccessful result"], usage)
+          : code === 0 ? (text.trim() ? terminal("success", "success", [], usage) : terminal("failed", "protocol", ["Gemini returned an empty answer"], usage)) : terminal("failed", "protocol", [`Gemini CLI exited ${code ?? "by signal"}`], usage);
+        finish({ text, end: { kind: "terminal", terminal: end }, usage });
       });
     });
   }
