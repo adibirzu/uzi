@@ -1,6 +1,6 @@
 // Fork-only, opt-in authority for one dedicated file-store Codex login. It never
 // probes HOME/CODEX_HOME/keyrings; do not share this directory with a CLI.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,7 @@ import path from "node:path";
 const AUTH_FILE = "auth.json";
 const SOURCE_ID_FILE = "codex-host-source-id";
 const REFRESH_LOCK_FILE = "uzi-refresh.lock";
+const REFRESH_FENCE_FILE = "uzi-refresh-uncertain.json";
 const MAX_AUTH_BYTES = 64 * 1024;
 // Mirrors the Go client's provider-response bound: refresh responses are untrusted.
 const MAX_PROVIDER_RESPONSE_BYTES = 1 << 20;
@@ -367,7 +368,7 @@ function unchangedLock(file: string, observed: fs.Stats, content: Buffer | undef
   }
 }
 
-function fsyncDirectory(directory: string): void {
+function fsyncDirectory(directory: string, required = false): void {
   let fd: number | undefined;
   try {
     fd = fs.openSync(directory, "r");
@@ -376,7 +377,7 @@ function fsyncDirectory(directory: string): void {
     // Some supported host filesystems do not permit fsync on directories. The
     // rename remains atomic there, but post-crash durability is not guaranteed.
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "EINVAL" && code !== "ENOTSUP" && code !== "EOPNOTSUPP") throw error;
+    if (required || (code !== "EINVAL" && code !== "ENOTSUP" && code !== "EOPNOTSUPP")) throw error;
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
@@ -414,8 +415,6 @@ class Source implements HostCodexCredentialSource {
   readonly kind = "worker_host" as const;
   // One source owns one refresh flight: concurrent runs get the same committed login.
   private flight: Promise<HostCodexLogin> | undefined;
-  private reLoginNeeded = false;
-  private rejected: HostCodexLogin | undefined;
 
   constructor(
     private source: SourceState,
@@ -443,18 +442,84 @@ class Source implements HostCodexCredentialSource {
 
   read(): HostCodexLogin {
     const login = this.current().login;
-    let reLoggedIn = false;
-    if (this.reLoginNeeded) {
-      if (this.rejected && !same(login, this.rejected)) {
-        this.reLoginNeeded = false;
-        this.rejected = undefined;
-        reLoggedIn = true;
-      } else {
-        relogin();
+    const fence = this.fence();
+    if (fence !== undefined) {
+      if (this.refreshDigest(login, fence.salt) === fence.digest) relogin();
+      const lock = path.join(this.home, REFRESH_LOCK_FILE);
+      if (!createLock(lock, currentLockOwner(), this.now())) unavailable();
+      try {
+        return this.reconcile(this.current().login);
+      } finally {
+        fs.unlinkSync(lock);
       }
     }
-    this.accept(login, reLoggedIn);
+    this.accept(login);
     return login;
+  }
+
+  private reconcile(login: HostCodexLogin): HostCodexLogin {
+    const pending = this.fence();
+    if (pending !== undefined) {
+      if (this.refreshDigest(login, pending.salt) === pending.digest) relogin();
+      this.accept(login, true);
+      fsyncDirectory(this.state, true);
+      this.clearFence();
+    } else {
+      this.accept(login);
+    }
+    return login;
+  }
+
+  private refreshDigest(login: HostCodexLogin, salt: string): string {
+    return createHash("sha256").update(salt).update("\0").update(login.refreshToken).digest("hex");
+  }
+
+  private fence(): { salt: string; digest: string } | undefined {
+    const file = path.join(this.home, REFRESH_FENCE_FILE);
+    try {
+      fs.lstatSync(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      return unavailable();
+    }
+    if (lstatOwned(file, 0o600).size > 1024) unavailable();
+    try {
+      const value: unknown = JSON.parse(read(file).toString("utf8"));
+      if (typeof value === "object" && value !== null) {
+        const record = value as { salt?: unknown; digest?: unknown };
+        if (typeof record.salt === "string" && /^[0-9a-f-]{36}$/.test(record.salt)
+          && typeof record.digest === "string" && /^[0-9a-f]{64}$/.test(record.digest)) {
+          return { salt: record.salt, digest: record.digest };
+        }
+      }
+    } catch {}
+    return unavailable();
+  }
+
+  private markUncertain(login: HostCodexLogin): void {
+    const salt = randomUUID();
+    const file = path.join(this.home, REFRESH_FENCE_FILE);
+    try {
+      const fd = fs.openSync(file, "wx", 0o600);
+      try {
+        fs.writeFileSync(fd, JSON.stringify({ salt, digest: this.refreshDigest(login, salt) }));
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fsyncDirectory(this.home, true);
+    } catch {
+      unavailable();
+    }
+  }
+
+  private clearFence(): void {
+    try {
+      fs.unlinkSync(path.join(this.home, REFRESH_FENCE_FILE));
+      fsyncDirectory(this.home, true);
+    } catch {
+      unavailable();
+    }
   }
 
   private accept(login: HostCodexLogin, forceRevision = false): void {
@@ -474,12 +539,13 @@ class Source implements HostCodexCredentialSource {
   }
 
   async release(signal?: AbortSignal): Promise<HostCodexLogin> {
-    const observed = this.read();
-    return refreshDue(observed, this.now()) ? this.refreshFrom(observed, signal) : observed;
+    const observed = this.current().login;
+    return this.fence() !== undefined || refreshDue(observed, this.now())
+      ? this.refreshFrom(observed, signal) : this.read();
   }
 
   async refresh(signal?: AbortSignal): Promise<HostCodexLogin> {
-    return this.refreshFrom(this.read(), signal);
+    return this.refreshFrom(this.current().login, signal);
   }
 
   private refreshFrom(observed: HostCodexLogin, signal?: AbortSignal): Promise<HostCodexLogin> {
@@ -554,14 +620,15 @@ class Source implements HostCodexCredentialSource {
     const unlock = await this.lock();
     try {
       const current = this.current();
+      this.reconcile(current.login);
       if (current.login.accountId !== observed.accountId) {
-        this.accept(current.login);
         return current.login;
       }
       // Compare after the lock: an external atomic writer wins and is adopted.
       if (!same(current.login, observed)) {
         return current.login;
       }
+      this.markUncertain(current.login);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), this.refreshTimeoutMs);
       let response: Response;
@@ -591,8 +658,6 @@ class Source implements HostCodexCredentialSource {
           (response.status === 400 || response.status === 401)
           && refreshMaterialRejected(body)
         ) {
-          this.reLoginNeeded = true;
-          this.rejected = current.login;
           relogin();
         }
         unavailable();
@@ -601,6 +666,8 @@ class Source implements HostCodexCredentialSource {
         unavailable();
       }
       const reply = body as Record<string, unknown>;
+      if ((reply.refresh_token !== undefined && !string(reply.refresh_token))
+        || (reply.id_token !== undefined && !string(reply.id_token))) unavailable();
       if (string(reply.id_token) && idTokenAccount(reply.id_token) !== observed.accountId) {
         unavailable();
       }
@@ -625,7 +692,7 @@ class Source implements HostCodexCredentialSource {
           fs.closeSync(fd);
         }
         fs.renameSync(temp, this.auth);
-        fsyncDirectory(this.home);
+        fsyncDirectory(this.home, true);
         lstatOwned(this.auth, 0o600);
       } catch {
         try {
@@ -635,6 +702,7 @@ class Source implements HostCodexCredentialSource {
         }
         unavailable();
       }
+      this.clearFence();
       const saved = this.read();
       return saved;
     } finally {

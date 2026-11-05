@@ -211,9 +211,15 @@ not run an interactive CLI against its home while uzi owns it. The worker
 refreshes the login locally and fails closed on an invalid source or unsafe
 refresh lock. It single-flights refreshes in-process, then uses an owner-only
 sidecar lock and compare-read before atomically replacing the complete `0600`
-file. It fsyncs the file and, where the filesystem permits it, the directory;
-on filesystems that reject directory fsync, atomic rename still holds but a
-post-crash durability promise does not.
+file. Before a provider exchange it durably writes `uzi-refresh-uncertain.json`
+in the dedicated home, containing only a random salt and a refresh-token digest.
+Refresh requires file and directory fsync support. A lost, malformed, rejected,
+or unsaved reply leaves the source unavailable across worker restarts; the old
+refresh token is never replayed. Replace the dedicated login with fresh refresh
+material to recover; an access-token-only edit is insufficient. Recovery holds
+the same lock and advances the source revision, so existing bindings cannot
+silently use the replacement login. Do not delete the uncertainty file to retry
+an old login.
 
 The lock records its boot and PID-namespace identity. Only a dead owner proven
 dead in that same namespace is reclaimed. A restarted container that cannot

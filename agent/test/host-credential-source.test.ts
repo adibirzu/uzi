@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -378,7 +378,7 @@ test("refresh-material rejection mirrors the API OAuth forms and an operator log
         return true;
       });
       await assert.rejects(tc.latched === false ? source.refresh() : source.release(), closed);
-      assert.equal(calls, tc.latched === false ? 2 : 1, "only 400/401 refresh-material rejection latches re-login");
+      assert.equal(calls, 1, "no uncertain refresh is replayed, including server errors");
     });
   }
 
@@ -446,4 +446,109 @@ test("oversized provider response is rejected closed and leaves no temporary aut
   await assert.rejects(source.refresh(), closed);
   assert.deepEqual(tempFiles(f.home), []);
   assert.equal(fs.readFileSync(f.auth, "utf8"), auth(), "failed refresh does not replace login");
+});
+
+
+test("uncertain exchanges stay fenced across source restart until refresh material is replaced", async t => {
+  for (const outcome of ["lost", "truncated", "body-error", "timeout", "malformed", "malformed-refresh", "malformed-id", "account", "save"] as const) {
+    await t.test(outcome, async t => {
+      const f = fixture(t);
+      let calls = 0;
+      const source = openHostCodexCredentialSource(f.home, f.state, {
+        refreshTimeoutMs: 10,
+        fetch: async (_url, init) => {
+          calls++;
+          if (outcome === "lost") throw new Error("lost reply");
+          if (outcome === "truncated") return new Response('{"access_token":');
+          if (outcome === "body-error") return new Response(new ReadableStream({
+            start(controller) { controller.error(new Error("truncated stream")); },
+          }));
+          if (outcome === "timeout") return new Response(new ReadableStream({
+            start(controller) {
+              init.signal?.addEventListener("abort", () => controller.error(new Error("timeout")), { once: true });
+            },
+          }));
+          if (outcome === "malformed") return new Response("{}");
+          return new Response(JSON.stringify({
+            access_token: "SENTINEL-ACCESS-ROTATED",
+            refresh_token: "SENTINEL-REFRESH-ROTATED",
+            ...(outcome === "account" ? { id_token: idToken("other-account") } : {}),
+            ...(outcome === "malformed-refresh" ? { refresh_token: 123 } : {}),
+            ...(outcome === "malformed-id" ? { id_token: null } : {}),
+          }));
+        },
+      });
+      const revision = source.sourceRevision;
+      if (outcome === "save") {
+        const rename = fs.renameSync;
+        const canonicalAuth = fs.realpathSync(f.auth);
+        t.mock.method(fs, "renameSync", (from: fs.PathLike, to: fs.PathLike) => {
+          if (to === canonicalAuth) throw new Error("publication failed");
+          return rename(from, to);
+        });
+      }
+      await assert.rejects(source.refresh(), closed);
+      t.mock.restoreAll();
+      assert.equal(source.ready(), false);
+      assert.throws(() => source.read(), closed);
+      await assert.rejects(source.release(), closed);
+      await assert.rejects(source.refresh(), closed);
+      assert.equal(calls, 1, "fenced material is never resubmitted");
+      assert.throws(() => openHostCodexCredentialSource(f.home, f.state), closed);
+      const fence = path.join(f.home, "uzi-refresh-uncertain.json");
+      const record = fs.readFileSync(fence, "utf8");
+      assert.doesNotMatch(record, /SENTINEL|access_token|refresh_token/);
+      assert.equal(fs.statSync(fence).mode & 0o777, 0o600);
+      assert.deepEqual(tempFiles(f.home), []);
+      fs.writeFileSync(f.auth, auth("changed-access-only"), { mode: 0o600 });
+      assert.equal(source.ready(), false, "an access-only edit cannot reconcile refresh uncertainty");
+      fs.writeFileSync(f.auth, auth(ACCESS, "SENTINEL-REFRESH-RELOGIN"), { mode: 0o600 });
+      let recoveredCalls = 0;
+      const recovered = openHostCodexCredentialSource(f.home, f.state, {
+        fetch: async () => {
+          recoveredCalls++;
+          return new Response(JSON.stringify({ access_token: "SENTINEL-ACCESS-RECOVERED" }));
+        },
+      });
+      assert.equal(recovered.sourceId, source.sourceId);
+      assert.equal(recovered.sourceRevision, revision + 1);
+      assert.equal(recovered.ready(), true);
+      assert.equal(fs.existsSync(fence), false);
+      assert.equal((await recovered.refresh()).accessToken, "SENTINEL-ACCESS-RECOVERED");
+      assert.equal(recoveredCalls, 1);
+      assert.equal(fs.existsSync(fence), false, "durable publication clears uncertainty");
+      assert.equal(openHostCodexCredentialSource(f.home, f.state).ready(), true);
+    });
+  }
+});
+
+test("a process exit during exchange leaves a restart-safe fence", t => {
+  const f = fixture(t);
+  const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+    import { openHostCodexCredentialSource } from './src/codex/host-credential-source.ts';
+    const source = openHostCodexCredentialSource(process.argv[1], process.argv[2], {
+      fetch: async () => process.exit(0),
+    });
+    await source.refresh();
+  `, f.home, f.state], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(child.status, 0, child.stderr);
+  assert.throws(() => openHostCodexCredentialSource(f.home, f.state), closed);
+  assert.equal(fs.readFileSync(f.auth, "utf8"), auth());
+  assert.equal(fs.existsSync(path.join(f.home, "uzi-refresh-uncertain.json")), true);
+});
+
+test("a refresh cannot reach the provider when its uncertainty fence cannot be persisted", async t => {
+  const f = fixture(t);
+  let calls = 0;
+  const source = openHostCodexCredentialSource(f.home, f.state, {
+    fetch: async () => { calls++; return new Response("{}"); },
+  });
+  const open = fs.openSync;
+  const fence = path.join(fs.realpathSync(f.home), "uzi-refresh-uncertain.json");
+  t.mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+    if (args[0] === fence) throw new Error("fence cannot persist");
+    return open(...args);
+  });
+  await assert.rejects(source.refresh(), closed);
+  assert.equal(calls, 0);
 });

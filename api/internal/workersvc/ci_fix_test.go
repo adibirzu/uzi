@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -94,14 +95,22 @@ func TestCreateCIFixRunRefusesBranchInUse(t *testing.T) {
 }
 
 func TestCreateCIFixRunRefusesWorkerHostCodexParent(t *testing.T) {
-	fs := &fakeStore{hostCodexRunForBranch: true}
-	svc := New(fs, newBox(t), testParams())
-	_, err := svc.CreateCIFixRun(context.Background(), uuid.New(), uuid.New(), "agent/issue-9", "t", "d", sampleSnapshot(), nil)
-	if !errors.Is(err, ErrHostCodexDerivedRunUnsupported) {
-		t.Fatalf("CreateCIFixRun error = %v, want ErrHostCodexDerivedRunUnsupported", err)
-	}
-	if fs.ciFixRunParams != nil {
-		t.Fatal("CreateCIFixRun inserted despite worker-host parent")
+	for _, auto := range []bool{false, true} {
+		t.Run(fmt.Sprintf("auto=%t", auto), func(t *testing.T) {
+			fs := &fakeStore{hostCodexRunForBranch: true}
+			svc := New(fs, newBox(t), testParams())
+			create := svc.CreateCIFixRun
+			if auto {
+				create = svc.CreateAutoCIFixRun
+			}
+			_, err := create(context.Background(), uuid.New(), uuid.New(), "agent/issue-9", "t", "d", sampleSnapshot(), nil)
+			if !errors.Is(err, ErrHostCodexDerivedRunUnsupported) {
+				t.Fatalf("error = %v, want ErrHostCodexDerivedRunUnsupported", err)
+			}
+			if fs.ciFixRunParams != nil {
+				t.Fatal("inserted despite worker-host parent")
+			}
+		})
 	}
 }
 

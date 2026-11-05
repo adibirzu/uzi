@@ -60,12 +60,15 @@ does not inspect ambient credential locations. One worker process owns
 proactive local refresh: it mirrors `api/internal/codexauth`'s OAuth exchange,
 single-flights in-process, serializes processes with an owner-only sidecar
 lock, compare-reads under that lock, and atomically replaces a `0600` complete
-document after file and (where the filesystem permits it) directory fsync.
-Filesystems that reject directory fsync retain atomic rename but do not receive
-a post-crash durability promise. Unknown fields and a rotated refresh token are
-preserved. OAuth refresh-material rejections close the source for re-login; a
-changed on-disk login clears that latch, and ambiguous replies are never
-blind-retried. The dedicated home must be used by exactly one worker and must not be used by an interactive CLI while
+document after file and directory fsync. Refresh refuses filesystems that cannot
+durably fsync the uncertainty fence and auth publication. Unknown fields and a rotated refresh token are
+preserved. Before every provider exchange, a durable non-secret fence in the dedicated home
+records a salted digest of the refresh token. Any failed or ambiguous exchange
+keeps that fence across process restarts and closes reads, readiness and further
+refreshes. A successfully persisted login clears it. Otherwise recovery requires
+replacement refresh material, under the same sidecar lock, and advances the
+source revision before clearing the fence. Access-only edits cannot recover it;
+no raw credential material is stored in the fence. The dedicated home must be used by exactly one worker and must not be used by an interactive CLI while
 uzi owns it. A lock records its boot and PID-namespace identity, so only a dead
 owner in the same namespace is reclaimed; a restarted container that cannot
 prove the prior owner is dead requires manual removal. Reclaimers recheck the
@@ -81,7 +84,9 @@ executor rather than receiving a server-credential fallback.
 Derived runs ultimately inherit the same bound worker, source ID, and revision.
 Until that handoff is implemented, M1 rejects every child or successor of a
 host-bound run with a typed unsupported-derived-run reason before credential
-resolution; it never substitutes a server Codex or Claude credential.
+resolution; it never substitutes a server Codex or Claude credential. CI fixes
+identify the current source as the newest run recorded on the failed branch;
+an older host-bound run does not permanently exclude a reused branch.
 
 API-host meters, source-aware parking/cooldown admission, and native-host/UID-split deployment are separate milestones. The M1 bridge does not call
 the server release/refresh routes. It must not be approximated by transmitting

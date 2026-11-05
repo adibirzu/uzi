@@ -9,9 +9,6 @@ import (
 	"github.com/vtmocanu/uzi/api/internal/store"
 )
 
-// TestHasWorkerHostCodexRunForBranchLiveDB pins the derived-run guard to the
-// exact (repo, branch) pair and to a worker-host binding. A server-held Codex
-// run on the same branch must not block a CI fix.
 func TestHasWorkerHostCodexRunForBranchLiveDB(t *testing.T) {
 	ctx, q, pool := autoEligPool(t)
 	user := seedBareUser(ctx, t, pool)
@@ -27,17 +24,18 @@ func TestHasWorkerHostCodexRunForBranchLiveDB(t *testing.T) {
 	repo, otherRepo := seedRepo(), seedRepo()
 	branch, otherBranch := "agent/issue-42", "agent/issue-43"
 	issueIID := int64(0)
-	seedRun := func(repo uuid.UUID, branch, source string) {
+	seedRun := func(repo uuid.UUID, branch, source string) uuid.UUID {
 		id := uuid.New()
 		issueIID++
 		if source == "worker_host" {
 			mustExec(ctx, t, pool, `INSERT INTO runs (id,user_id,repo_id,kind,issue_iid,issue_title,issue_description,status,branch,harness,
 				codex_credential_source_kind,codex_credential_source_id,codex_credential_source_revision,codex_credential_source_worker_id)
 				VALUES ($1,$2,$3,'issue',$4,'t','d','queued',$5,'codex','worker_host',$6,1,$7)`, id, user, repo, issueIID, branch, uuid.NewString(), uuid.New())
-			return
+			return id
 		}
 		mustExec(ctx, t, pool, `INSERT INTO runs (id,user_id,repo_id,kind,issue_iid,issue_title,issue_description,status,branch,harness)
 			VALUES ($1,$2,$3,'issue',$4,'t','d','queued',$5,'codex')`, id, user, repo, issueIID, branch)
+		return id
 	}
 	seedRun(repo, branch, "server")
 
@@ -54,7 +52,7 @@ func TestHasWorkerHostCodexRunForBranchLiveDB(t *testing.T) {
 	if has(repo, branch) {
 		t.Fatal("server-credential run matched worker-host guard")
 	}
-	seedRun(repo, branch, "worker_host")
+	host := seedRun(repo, branch, "worker_host")
 	if !has(repo, branch) {
 		t.Fatal("worker-host run on the same repo and branch did not match")
 	}
@@ -63,5 +61,15 @@ func TestHasWorkerHostCodexRunForBranchLiveDB(t *testing.T) {
 	}
 	if has(otherRepo, branch) {
 		t.Fatal("worker-host run on another repo matched")
+	}
+	server := seedRun(repo, branch, "server")
+	mustExec(ctx, t, pool, `UPDATE runs SET created_at = now() - interval '1 day' WHERE id = $1`, host)
+	mustExec(ctx, t, pool, `UPDATE runs SET created_at = now() WHERE id = $1`, server)
+	if has(repo, branch) {
+		t.Fatal("historical host login blocked a newer server-backed source run")
+	}
+	mustExec(ctx, t, pool, `UPDATE runs SET created_at = now() + interval '1 day' WHERE id = $1`, host)
+	if !has(repo, branch) {
+		t.Fatal("current host-backed source run was not refused after branch reuse")
 	}
 }

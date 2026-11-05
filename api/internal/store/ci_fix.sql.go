@@ -666,12 +666,14 @@ func (q *Queries) HasActiveIssueRunForIID(ctx context.Context, arg HasActiveIssu
 }
 
 const hasWorkerHostCodexRunForBranch = `-- name: HasWorkerHostCodexRunForBranch :one
-SELECT EXISTS (
-    SELECT 1 FROM runs
+SELECT COALESCE((
+    SELECT codex_credential_source_kind = 'worker_host'
+    FROM runs
     WHERE repo_id = $1::uuid
       AND branch = $2
-      AND codex_credential_source_kind = 'worker_host'
-) AS host_bound
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+), false)::boolean AS host_bound
 `
 
 type HasWorkerHostCodexRunForBranchParams struct {
@@ -679,8 +681,6 @@ type HasWorkerHostCodexRunForBranchParams struct {
 	Branch pgtype.Text `json:"branch"`
 }
 
-// CI fixes are derived work on a failed MR branch. A worker-host Codex binding is
-// non-transferable, so that branch cannot resolve a server-held credential.
 func (q *Queries) HasWorkerHostCodexRunForBranch(ctx context.Context, arg HasWorkerHostCodexRunForBranchParams) (bool, error) {
 	row := q.db.QueryRow(ctx, hasWorkerHostCodexRunForBranch, arg.RepoID, arg.Branch)
 	var host_bound bool
