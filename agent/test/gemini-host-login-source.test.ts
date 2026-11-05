@@ -37,6 +37,7 @@ test("Gemini host source rejects symlink homes, wrong modes, missing or unsafe C
   fs.mkdirSync(f.home, { mode: 0o700 });
   fs.rmSync(f.home, { recursive: true });
   fs.writeFileSync(f.home, "not a directory", { mode: 0o600 });
+  fs.chmodSync(f.home, 0o700); // explicit chmod: the create mode is masked by umask
   assert.equal(source.ready(), false, "regular-file home is rejected");
   fs.unlinkSync(f.home);
   fs.mkdirSync(f.home, { mode: 0o700 });
