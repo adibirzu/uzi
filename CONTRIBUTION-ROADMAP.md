@@ -31,7 +31,7 @@ work must be checked again before implementation.
 
 | Stage | Contributor work | Fork tracking | Upstream alignment / decision needed |
 |---|---|---|---|
-| Now | Sync upstream through a merge PR; reconcile overlapping snapshot fixes and explain failing CI | [#22](https://github.com/adibirzu/uzi/issues/22), [PR #23](https://github.com/adibirzu/uzi/pull/23) | Upstream [#3947](https://github.com/vtmocanu/uzi/pull/3947) already supplies the fixed snapshot projection; avoid a duplicate fix |
+| Now | Sync upstream through a merge PR; reconcile overlapping snapshot fixes and summary usage diagnostics | [#22](https://github.com/adibirzu/uzi/issues/22), [PR #25](https://github.com/adibirzu/uzi/pull/25), including [PR #26](https://github.com/adibirzu/uzi/pull/26) | Supersedes PR #23 without rewriting history. Upstream [#3947](https://github.com/vtmocanu/uzi/pull/3947) supplies the fixed snapshot projection; exact-head CI remains the landing gate |
 | First | Qualify Codex subscription execution with three real sandbox runs, account meters and limit parking; verify API-key fallback only when opted in | [#1](https://github.com/adibirzu/uzi/issues/1), [#15](https://github.com/adibirzu/uzi/issues/15) | [#229](https://github.com/vtmocanu/uzi/issues/229), [#1209](https://github.com/vtmocanu/uzi/issues/1209); host-held mode needs an explicit upstream custody decision |
 | First | Host-source list/picker and exact binding inheritance for successor/child runs | [#18](https://github.com/adibirzu/uzi/issues/18), [#19](https://github.com/adibirzu/uzi/issues/19) | Follow-up to the optional host-login proposal; not included in M1 |
 | First | Subscription-first routing, usage-aware parking and per-subscription budgets | [#15](https://github.com/adibirzu/uzi/issues/15) | Extend existing account-pool/admission work; upstream core must retain server-held credential support |
@@ -73,3 +73,16 @@ commitment.
 - The contributor updates this file when a linked PR merges, scope changes, a
   task is parked, or upstream supersedes a proposal. Re-check upstream status
   rather than copying unchecked historical checklists.
+
+## Added owner requests: workflow profiles, AXI and verification
+
+Requested 2026-11-05; design in [fork PRD #10](prds/10-workflow-profiles-axi-verification.md).
+These are planned, not shipped:
+
+| Request | Planned outcome | Boundary |
+|---|---|---|
+| Keep uzi's own harness available | Native workflow remains the default; explicit per-repo/run owner selection of the full existing harness workflow (owner-decided 2026-11-05) | Workflow selection is distinct from Claude/Codex model selection; not reduced to policy/tool overlays; phased delivery with qualification gates |
+| Integrate the existing harness | Reuse harness-library contract v1, pinned overlays, exact-head checks and metadata-only outcomes | Do not embed project-specific stream/suite scripts or weaken their gates |
+| AXI plugin approach | Explicit, versioned tool selection with compact scoped discovery and contextual commands | No native repo hook discovery, automatic installs or host credential exposure |
+| no-mistakes approach | Exact-head evidence, independent review, deterministic gates and owner decisions | Reuse uzi's workflow first; an actual daemon connector needs single-writer custody and must stay outside untrusted worker execution |
+| Both credential review fixes | Restart-safe refresh uncertainty and current-run-scoped CI-fix eligibility | Authorized separately; work remains on the focused host-login feature branch |

@@ -114,3 +114,9 @@ upstream, and only prints the PR command. `SYNC_DATE=YYYYMMDD` overrides the dat
 for tests. `FORK_ORIGIN_PATTERN` overrides the origin URL ERE for file:// tests;
 by default every origin fetch and push URL must identify `adibirzu/uzi` on GitHub
 and differ from upstream's fetch URL. Fork-only hygiene changes do not ship a changelog fragment.
+
+## Contribution roadmap
+
+[CONTRIBUTION-ROADMAP.md](CONTRIBUTION-ROADMAP.md) separates our delivered work,
+planned features and upstream alignment. The native/harness integration, AXI
+and verification proposal is in [fork PRD #10](prds/10-workflow-profiles-axi-verification.md).
