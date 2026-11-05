@@ -56,6 +56,7 @@ type AgentTemplate struct {
 	UserID      pgtype.UUID        `json:"user_id"`
 	Customized  bool               `json:"customized"`
 	Origin      pgtype.Text        `json:"origin"`
+	CodexModel  pgtype.Text        `json:"codex_model"`
 }
 
 type AgentTemplateAllocation struct {
@@ -1264,6 +1265,8 @@ type Run struct {
 	HarnessOtherMeasured          pgtype.Float8      `json:"harness_other_measured"`
 	HarnessPreferredHeld          pgtype.Bool        `json:"harness_preferred_held"`
 	HarnessOtherHeld              pgtype.Bool        `json:"harness_other_held"`
+	HarnessPreferredWeeklyResetAt pgtype.Timestamptz `json:"harness_preferred_weekly_reset_at"`
+	HarnessOtherWeeklyResetAt     pgtype.Timestamptz `json:"harness_other_weekly_reset_at"`
 	CodexCredentialSourceKind     pgtype.Text        `json:"codex_credential_source_kind"`
 	CodexCredentialSourceID       pgtype.Text        `json:"codex_credential_source_id"`
 	CodexCredentialSourceRevision pgtype.Int8        `json:"codex_credential_source_revision"`

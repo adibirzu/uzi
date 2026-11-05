@@ -48,6 +48,34 @@ for (const pass of ["intent", "plan"] as const) {
       assert.deepEqual(warnings, [{ reason: "worker_host_credential" }]);
     });
 
+    it("skips worker-host usage reporting but warns when a normal Claude pass has no usage", async () => {
+      const usageCalls: unknown[] = [];
+      const warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
+      const queryFn = async function* () {
+        yield { type: "assistant", message: { content: [{ type: "text", text }] } };
+        yield { type: "result", subtype: "success", is_error: false };
+      } as unknown as SdkQueryFn;
+      const r = new SummaryRunner({
+        ...nullLogger(),
+        warn: (message, fields) => void warnings.push({ message, ...(fields === undefined ? {} : { fields }) }),
+      }, { homeRoot, queryFn });
+
+      assert.equal(await run(r, {
+        ...base,
+        claim: { run_id: "run-summary", secrets: { codex: workerHostBinding } },
+        onUsage: (usage) => void usageCalls.push(usage),
+      }), null);
+      assert.equal(usageCalls.length, 0);
+      assert.deepEqual(warnings, [{ message: `${pass} summary generation failed`, fields: { reason: "worker_host_credential" } }]);
+
+      assert.ok(await run(r, { ...base, onUsage: (usage) => void usageCalls.push(usage) }));
+      assert.equal(usageCalls.length, 0);
+      // HOME cleanup can emit a separate platform diagnostic; this check owns usage reporting.
+      assert.deepEqual(warnings.filter(({ message }) => message === "summary pass usage unavailable"), [
+        { message: "summary pass usage unavailable", fields: { pass } },
+      ]);
+    });
+
     for (const binding of bindings) {
       it(`${binding.auth_mode}: pins model/effort, denies refresh, and preserves prompts/output`, async () => {
         let builds = 0;
