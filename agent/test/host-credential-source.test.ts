@@ -180,6 +180,34 @@ test("Gemini host credential configuration is host-only and strict", () => {
   );
 });
 
+test("Grok host credential configuration is host-only, advice-only, and budgeted", () => {
+  const base = { UZI_API_URL: "http://example.test", UZI_WORKER_TOKEN: "synthetic" };
+  assert.equal(loadConfig(base).grokCredentialSource, undefined);
+  assert.equal(loadConfig({ ...base, UZI_GROK_CREDENTIAL_SOURCE: "" }).grokCredentialSource, undefined);
+  assert.deepEqual(loadConfig(base).grokRoles, ["reviewer", "cross_check"]);
+  assert.equal(loadConfig(base).grokDailyCallBudget, 20);
+  const complete = {
+    ...base, UZI_GROK_CREDENTIAL_SOURCE: "  WORKER_HOST  ",
+    UZI_GROK_HOST_HOME: "/dedicated/grok", UZI_GROK_CLI: "/usr/local/bin/grok",
+  };
+  assert.deepEqual(loadConfig(complete).grokCredentialSource, { kind: "worker_host", home: "/dedicated/grok", cli: "/usr/local/bin/grok" });
+  for (const source of ["server", "typo"]) {
+    assert.throws(() => loadConfig({ ...complete, UZI_GROK_CREDENTIAL_SOURCE: source }), /invalid UZI_GROK_CREDENTIAL_SOURCE/);
+  }
+  assert.throws(() => loadConfig({ ...complete, UZI_GROK_HOST_HOME: "relative" }), /invalid UZI_GROK_HOST_HOME/);
+  assert.throws(() => loadConfig({ ...complete, UZI_GROK_CLI: "grok" }), /invalid UZI_GROK_CLI/);
+  for (const roles of ["author", "reviewer,author", "reviewer,unknown", "reviewer,,cross_check", "reviewer,reviewer"]) {
+    assert.throws(() => loadConfig({ ...complete, UZI_GROK_ROLES: roles }), /invalid UZI_GROK_ROLES/);
+  }
+  assert.deepEqual(loadConfig({ ...complete, UZI_GROK_ROLES: " cross_check , reviewer " }).grokRoles, ["cross_check", "reviewer"]);
+  for (const [value, expected] of [["0", 0], ["20", 20], ["200", 200]] as const) {
+    assert.equal(loadConfig({ ...complete, UZI_GROK_DAILY_CALL_BUDGET: value }).grokDailyCallBudget, expected);
+  }
+  for (const budget of ["", "-1", "+1", "1.5", "201", "1e2", "nope"]) {
+    assert.throws(() => loadConfig({ ...complete, UZI_GROK_DAILY_CALL_BUDGET: budget }), /invalid UZI_GROK_DAILY_CALL_BUDGET/);
+  }
+});
+
 test("refresh is single-flight for concurrent releases and atomically rotates tokens", async t => {
   const f = fixture(t);
   fs.writeFileSync(f.auth, auth(expiredToken(), REFRESH, { future_key: { retained: true } }), { mode: 0o600 });

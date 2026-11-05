@@ -95,3 +95,34 @@ credential source and therefore no fallback. A configured Gemini source must
 pass its local readiness check during worker startup or the worker refuses to
 start. Its registration advertises only opaque `gemini_host_login_v1` metadata;
 the later Gemini harness must revalidate the CLI boundary immediately before use.
+
+### Grok host-only custody
+
+Grok is a separate explicit `worker_host` source: empty/unset disables it and
+every other source, including `server`, refuses startup. It has no server-held
+credential or API-key path. The source is a dedicated real worker-owned `0700`
+directory plus an absolute, regular, executable CLI that is worker- or
+root-owned, not group/world-writable, and not a symlink. Startup validates only
+that metadata and never reads or lists files below the home; an unsafe or missing
+source refuses startup. Registration reports only `grok_host_login_v1` and the
+future harness must revalidate immediately before use.
+
+Grok is permanently excluded from authorship: `UZI_GROK_ROLES` defaults to the
+strict, unique `reviewer,cross_check` subset; `author` or any other role rejects
+configuration. `UZI_GROK_DAILY_CALL_BUDGET` defaults to 20, accepts only the
+integer range 0..200, and 0 disables calls. These are configuration contracts;
+their runtime enforcement belongs to the later harness issue, which is also the
+first issue allowed to execute a Grok turn.
+
+Verified facts for the real 1.0.70 CLI define that later harness boundary, not
+this foundation's test coverage: login is scoped by `GROK_HOME` and `HOME/.grok`.
+A fresh `GROK_HOME` reports `You are not authenticated.` and creates config files
+there; an operator uses `GROK_HOME="<UZI_GROK_HOST_HOME>" grok login --device-code`.
+Headless use is `grok -p <prompt> --output-format json|streaming-json`; without
+authentication it emits an error object with `Not signed in` in its message. Its
+default model is `grok-4.6`, and its relevant flags are `--no-plan`,
+`--permission-mode`, `--sandbox <PROFILE>`, `--tools`, `--disable-web-search`,
+`--max-turns`, and `--prompt-file`. A future child receives
+`GROK_HOME=<UZI_GROK_HOST_HOME>` after scrubbing `XAI_API_KEY`, every
+`GROK_AUTH*`, and every `GROK_AUTH_PROVIDER_*` variable. No Grok execution was
+tested here.

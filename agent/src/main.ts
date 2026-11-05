@@ -53,6 +53,7 @@ import { probeCodexRuntime } from "./codex/codex-runtime-probe.js";
 import { landlockProbeForMode, resolveCodexHarnessAvailability } from "./codex/codex-capability.js";
 import { HostCredentialSourceError, openHostCodexCredentialSource, type HostCodexCredentialSource } from "./codex/host-credential-source.js";
 import { openHostGeminiSource } from "./gemini/host-login-source.js";
+import { openHostGrokSource } from "./grok/host-login-source.js";
 import { reapCodexCommandOrphans, type ReapOrphansResult } from "./codex/launcher.js";
 import { SECRET_PATH_PREFIXES, workerSecretDenyPaths } from "./guardrails.js";
 import type {
@@ -559,6 +560,14 @@ async function mainBody(): Promise<void> {
     if (!ready) throw new Error("host Gemini login source is not ready");
     config.geminiHostReadiness = () => source.ready();
     log.info("host Gemini login source validated", { source_kind: source.kind, ready });
+  }
+
+  if (config.grokCredentialSource?.kind === "worker_host") {
+    const source = openHostGrokSource(config.grokCredentialSource.home, config.grokCredentialSource.cli);
+    const ready = source.ready();
+    if (!ready) throw new Error("host Grok login source is not ready");
+    config.grokHostReadiness = () => source.ready();
+    log.info("host Grok login source validated", { source_kind: source.kind, ready });
   }
 
   // Issue #3153: when TMPDIR lives under the (now persistent) `<dataDir>/runner`, confirm it is a
