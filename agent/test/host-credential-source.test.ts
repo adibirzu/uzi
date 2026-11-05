@@ -155,7 +155,11 @@ test("Gemini host credential configuration is host-only and strict", () => {
     { kind: "worker_host", home: "/dedicated/gemini", cli: "/usr/local/bin/gemini" },
   );
   for (const source of ["server", "WORKER_HOST", "typo"]) {
-    assert.throws(() => loadConfig({ ...base, UZI_GEMINI_CREDENTIAL_SOURCE: source }), /UZI_GEMINI_CREDENTIAL_SOURCE/);
+    // Hard requirement: no server fallback. Even with a complete host config, any other source refuses startup.
+    assert.throws(
+      () => loadConfig({ ...base, UZI_GEMINI_CREDENTIAL_SOURCE: source, UZI_GEMINI_HOST_HOME: "/dedicated/gemini", UZI_GEMINI_CLI: "/usr/local/bin/gemini" }),
+      /invalid UZI_GEMINI_CREDENTIAL_SOURCE/,
+    );
   }
   assert.throws(
     () => loadConfig({ ...base, UZI_GEMINI_CREDENTIAL_SOURCE: "worker_host", UZI_GEMINI_HOST_HOME: "relative", UZI_GEMINI_CLI: "/bin/gemini" }),
