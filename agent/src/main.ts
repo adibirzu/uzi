@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, memoryGuardTimingOf, MAX_CONCURRENT_RUNS_SOFT_CEILING, type ExecutorKind, type Config } from "./config.js";
@@ -66,6 +67,12 @@ import { ensureRunnerTmpdir } from "./runner-tmpdir.js";
 import { createPodEpoch, restoreEpochRuntimeTmpdir } from "./pod-epoch-lock.js";
 import { inspectPodEpochBootstrap } from "./pod-epoch-bootstrap.js";
 import { PodEpochSettlementError, runPodEpochShadow } from "./pod-epoch-reclaim.js";
+
+export function openWorkerHostCodexCredentialSource(home: string, dataDir: string): HostCodexCredentialSource {
+  const stateDir = path.join(dataDir, "codex-host-state");
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  return openHostCodexCredentialSource(home, stateDir);
+}
 
 export function buildWorkerGitCache(
   config: Pick<Config, "dataDir" | "recoveryDecodedLimitBytes">,
@@ -538,7 +545,7 @@ async function mainBody(): Promise<void> {
   // CODEX_HOME/HOME read. The source itself retains no credential material.
   let hostCodexSource: HostCodexCredentialSource | undefined;
   if (config.codexCredentialSource.kind === "worker_host") {
-    const source = openHostCodexCredentialSource(config.codexCredentialSource.home, config.dataDir);
+    const source = openWorkerHostCodexCredentialSource(config.codexCredentialSource.home, config.dataDir);
     hostCodexSource = source;
     config.codexHostSource = {
       sourceId: source.sourceId,

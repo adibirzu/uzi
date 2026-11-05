@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, chmodSync, writeFileSync, statSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -11,7 +11,7 @@ import { SdkExecutor } from "../src/sdk-executor.js";
 import { CodexExecutor, FailClosedExecutor, type CodexAdviceHarnessFactory, type CodexAdviceHarnessBuildParams } from "../src/codex/codex-executor.js";
 import { ownedSummaryFactories, summaryOwnership } from "../src/codex/summary-ownership.js";
 import type { SummaryRunner } from "../src/summary-runner.js";
-import { buildChatExecutor, buildRunExecutor, type BuildRunExecutorDeps } from "../src/main.js";
+import { buildChatExecutor, buildRunExecutor, openWorkerHostCodexCredentialSource, type BuildRunExecutorDeps } from "../src/main.js";
 import { ChatExecutor } from "../src/chat-executor.js";
 import type { ClaimCodexSecrets } from "../src/protocol.js";
 import { HostCredentialSourceError, type HostCodexCredentialSource } from "../src/codex/host-credential-source.js";
@@ -338,3 +338,26 @@ describe("buildChatExecutor — worker secret deny paths (issue #1761)", () => {
     assert.deepEqual(read(e), []);
   });
 });
+
+for (const mode of [0o755, 0o2770]) {
+  it(`host source startup isolates private state under a ${mode.toString(8)} data root`, t => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "uzi-host-startup-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const home = path.join(root, "home");
+    const data = path.join(root, "data");
+    mkdirSync(home, { mode: 0o700 });
+    mkdirSync(data);
+    chmodSync(data, mode);
+    writeFileSync(path.join(home, "auth.json"), JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { id_token: "fixture-id", access_token: "fixture-access", refresh_token: "fixture-refresh", account_id: "fixture-account" },
+    }), { mode: 0o600 });
+    const source = openWorkerHostCodexCredentialSource(home, data);
+    assert.equal(source.ready(), true);
+    assert.equal(source.read().accountId, "fixture-account");
+    assert.equal(statSync(data).mode & 0o7777, mode);
+    assert.deepEqual(readdirSync(data), ["codex-host-state"]);
+    assert.equal(statSync(path.join(data, "codex-host-state")).mode & 0o777, 0o700);
+    assert.equal(openWorkerHostCodexCredentialSource(home, data).sourceId, source.sourceId);
+  });
+}

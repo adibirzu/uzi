@@ -60,6 +60,14 @@ function lockRecord(pid: number, pidNamespace?: string): string {
   return JSON.stringify({ pid, owner: bootID === undefined ? `hostname:${os.hostname()}` : `boot:${bootID}`, pid_namespace: namespace });
 }
 
+const hasPidNamespace = (JSON.parse(lockRecord(process.pid)) as { pid_namespace?: string }).pid_namespace !== undefined;
+
+function manualRemoval(error: unknown): boolean {
+  assert.ok(error instanceof HostCredentialSourceError);
+  assert.match(error.message, /remove uzi-refresh\.lock manually/);
+  return true;
+}
+
 function fixture(t: test.TestContext): { home: string; state: string; auth: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "uzi-host-codex-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -184,19 +192,22 @@ test("refresh locks reclaim a stale same-process owner and a dead owner in the s
     return new Response(JSON.stringify({ access_token: "SENTINEL-ACCESS-LOCKED" }));
   };
   const source = openHostCodexCredentialSource(f.home, f.state, { fetch });
-  assert.equal((await source.release()).accessToken, "SENTINEL-ACCESS-LOCKED");
-  assert.equal(calls, 1, "a prior process life with the same owner record is reclaimed");
-  assert.equal(fs.existsSync(lock), false, "stale same-process lock is removed before refresh");
+  if (hasPidNamespace) {
+    assert.equal((await source.release()).accessToken, "SENTINEL-ACCESS-LOCKED");
+    assert.equal(calls, 1, "a prior process life with the same owner record is reclaimed");
+    assert.equal(fs.existsSync(lock), false, "stale same-process lock is removed before refresh");
 
-  fs.writeFileSync(f.auth, auth(expiredToken()), { mode: 0o600 });
-  let namespace: string | undefined;
-  try {
-    namespace = fs.readlinkSync("/proc/self/ns/pid");
-  } catch {}
-  if (namespace !== undefined) {
-    fs.writeFileSync(lock, lockRecord(999_999_999, namespace), { mode: 0o600 });
+    fs.writeFileSync(f.auth, auth(expiredToken()), { mode: 0o600 });
+    fs.writeFileSync(lock, lockRecord(999_999_999), { mode: 0o600 });
     assert.equal((await source.release()).accessToken, "SENTINEL-ACCESS-LOCKED");
     assert.equal(calls, 2, "dead lock holder is recovered");
+  } else {
+    for (const pid of [process.pid, 999_999_999]) {
+      fs.writeFileSync(lock, lockRecord(pid), { mode: 0o600 });
+      await assert.rejects(source.release(), manualRemoval);
+      assert.equal(fs.existsSync(lock), true);
+      assert.equal(calls, 0);
+    }
   }
 
   fs.writeFileSync(f.auth, auth(expiredToken()), { mode: 0o600 });
@@ -206,7 +217,7 @@ test("refresh locks reclaim a stale same-process owner and a dead owner in the s
     assert.match(error.message, /remove uzi-refresh\.lock manually/);
     return true;
   });
-  assert.equal(calls, namespace === undefined ? 1 : 2, "a foreign namespace lock is never reclaimed");
+  assert.equal(calls, hasPidNamespace ? 2 : 0, "a foreign namespace lock is never reclaimed");
   fs.unlinkSync(lock);
 
   fs.writeFileSync(lock, "", { mode: 0o600 });
@@ -270,13 +281,18 @@ test("a waiter shares an in-process lock through an aliased home", async t => {
 
   const holding = holder.refresh();
   await firstStarted;
-  const waiting = waiter.refresh();
+  const waiting = hasPidNamespace ? waiter.refresh() : assert.rejects(waiter.refresh(), manualRemoval);
   await new Promise(resolve => setTimeout(resolve, 35));
   assert.equal(calls, 1, "the waiter must not reclaim an in-process holder through an alias");
   resolveFirst(new Response(JSON.stringify({ access_token: "SENTINEL-ACCESS-SHARED" })));
 
   const [, refreshed] = await Promise.all([holding, waiting]);
-  assert.equal(refreshed.accessToken, "SENTINEL-ACCESS-SHARED");
+  if (hasPidNamespace) {
+    assert.ok(refreshed);
+    assert.equal(refreshed.accessToken, "SENTINEL-ACCESS-SHARED");
+  } else {
+    assert.equal(holder.read().accessToken, "SENTINEL-ACCESS-SHARED");
+  }
   assert.equal(calls, 1, "the waiter adopts the released refresh without another provider call");
 });
 
@@ -293,6 +309,12 @@ test("compare-before-save adopts external atomic writer without fetch", async t 
   const lock = path.join(f.home, "uzi-refresh.lock");
   fs.writeFileSync(lock, lockRecord(process.pid), { mode: 0o600 });
   const adopted = source.release();
+  if (!hasPidNamespace) {
+    await assert.rejects(adopted, manualRemoval);
+    assert.equal(fs.existsSync(lock), true);
+    assert.equal(calls, 0);
+    return;
+  }
   fs.writeFileSync(
     f.auth,
     auth("SENTINEL-ACCESS-CLI", "SENTINEL-REFRESH-CLI"),
