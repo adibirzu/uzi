@@ -180,12 +180,28 @@ func (s *Service) createCIFixRun(ctx context.Context, userID, repoID uuid.UUID, 
 	if err := s.guardDefaultBranch(ctx, row); err != nil {
 		return store.Run{}, err
 	}
-	// A CI fix derives from its failed branch. Carry a host binding forward rather
-	// than resolving a server credential; the creation transaction revalidates it.
-	if parent, e := s.q.GetWorkerHostCodexRunForBranch(ctx, store.GetWorkerHostCodexRunForBranchParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}}); e == nil {
-		ctx = inheritHostCodexSource(ctx, parent)
-	} else if !errors.Is(e, pgx.ErrNoRows) {
-		return store.Run{}, e
+	// Read the current parent to choose the resolver lane. It is read again after
+	// LockRunBranch below, closing the branch-link race before the insert.
+	parent, parentErr := s.q.GetWorkerHostCodexRunForBranch(ctx, store.GetWorkerHostCodexRunForBranchParams{RepoID: repoID, UserID: userID, Branch: pgtype.Text{String: ref, Valid: true}})
+	var expectedParent *uuid.UUID
+	if parentErr == nil {
+		expectedParent = &parent.ID
+		if parent.CodexCredentialSourceKind.Valid && parent.CodexCredentialSourceKind.String == "worker_host" {
+			ctx, err = inheritHostCodexSource(ctx, parent)
+			if err != nil {
+				return store.Run{}, err
+			}
+		} else {
+			hostBound, e := s.q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{RepoID: repoID, UserID: userID, Branch: pgtype.Text{String: ref, Valid: true}})
+			if e != nil {
+				return store.Run{}, e
+			}
+			if hostBound {
+				return store.Run{}, ErrHostCodexDerivedRunUnsupported
+			}
+		}
+	} else if !errors.Is(parentErr, pgx.ErrNoRows) {
+		return store.Run{}, parentErr
 	}
 
 	snapJSON, err := json.Marshal(snapshot)
@@ -204,6 +220,25 @@ func (s *Service) createCIFixRun(ctx context.Context, userID, repoID uuid.UUID, 
 		// waiter's checks are new READ COMMITTED statements and see the holder's committed row.
 		if err := q.LockRunBranch(ctx, repoID, ref); err != nil {
 			return store.Run{}, err
+		}
+		// The first parent lookup selects the pre-insert resolution lane; this
+		// locked reread makes that choice stable. A changed parent refuses rather
+		// than letting an old host binding degrade into ordinary D11 resolution.
+		fresh, e := q.GetWorkerHostCodexRunForBranch(ctx, store.GetWorkerHostCodexRunForBranchParams{RepoID: repoID, UserID: userID, Branch: pgtype.Text{String: ref, Valid: true}})
+		if e != nil && !errors.Is(e, pgx.ErrNoRows) {
+			return store.Run{}, e
+		}
+		if (expectedParent == nil && e == nil) || (expectedParent != nil && (e != nil || fresh.ID != *expectedParent)) {
+			return store.Run{}, ErrHostCodexSourceUnavailable
+		}
+		if e == nil && !(fresh.CodexCredentialSourceKind.Valid && fresh.CodexCredentialSourceKind.String == "worker_host") {
+			hostBound, e := q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{RepoID: repoID, UserID: userID, Branch: pgtype.Text{String: ref, Valid: true}})
+			if e != nil {
+				return store.Run{}, e
+			}
+			if hostBound {
+				return store.Run{}, ErrHostCodexDerivedRunUnsupported
+			}
 		}
 		// Any ref: refuse a fix on a ref an active run already holds as runs.branch (a task
 		// run's branch). The uq_runs_one_active_ci_fix index cannot express this.

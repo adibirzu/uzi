@@ -80,10 +80,16 @@ executor rather than receiving a server-credential fallback.
 
 F4 is implemented for MR rework, CI fix, judge (automatic and rerun), task
 review, and then-fix: each child inherits the parent's exact worker, source ID,
-and source revision in the create transaction. The exact worker/source revision
-is revalidated before commit; an unavailable, replaced, or stale source returns
-the typed host-source-unavailable refusal and never falls back to a server
-credential. Plan/code cross-check remain typed refusals because they require an
+and source revision in the create transaction. An incomplete persisted tuple is
+also a typed host-source-unavailable refusal; it never downgrades to D11.
+The exact worker/source revision is revalidated under `FOR SHARE` before commit;
+claim-time admission remains the final fence over the bounded post-commit
+heartbeat window. CI-fix reads the latest same-user branch parent (created-at,
+then id); a latest non-host parent uses the old non-host path, except that an
+older host-bound row retains the prior typed refusal rather than silently
+switching credential custody. Successor/re-dispatch and restart do not mint a
+new run or re-resolve credentials: they preserve their existing run binding.
+Plan/code cross-check remain typed refusals because they require an
 opposite-harness server credential rather than the parent's execution lane.
 
 API-host meters, source-aware parking/cooldown admission, and native

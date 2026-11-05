@@ -6505,6 +6505,7 @@ WHERE id = $1
   AND 'codex_host_login_v1' = ANY(protocol_capabilities)
   AND 'codex_harness_v1' = ANY(protocol_capabilities)
   AND 'codex_runtime_v2' = ANY(protocol_capabilities)
+FOR SHARE
 `
 
 type GetReadyWorkerCodexHostSourceByIDParams struct {

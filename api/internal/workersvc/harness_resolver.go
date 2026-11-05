@@ -210,7 +210,11 @@ type HostCodexSource struct {
 	Revision int64
 	// WorkerID pins derived work to its parent's exact host. It is optional only
 	// for a user-requested source; inherited sources never re-place by tuple.
-	WorkerID  uuid.UUID
+	WorkerID uuid.UUID
+	// Inherited distinguishes a persisted parent binding from a caller-selected
+	// source. An inherited source must retain its exact worker; it is never
+	// allowed to degrade into same-user tuple placement.
+	Inherited bool
 	Automatic bool
 }
 
@@ -224,7 +228,15 @@ func WithHostCodexSource(ctx context.Context, source HostCodexSource) context.Co
 
 func hostCodexSourceFromContext(ctx context.Context) (HostCodexSource, bool) {
 	s, ok := ctx.Value(hostCodexSourceContextKey{}).(HostCodexSource)
-	return s, ok && (s.Automatic || (s.ID != "" && s.Revision > 0))
+	if !ok {
+		return HostCodexSource{}, false
+	}
+	if s.Inherited && (s.ID == "" || s.Revision <= 0 || s.WorkerID == uuid.Nil) {
+		// The caller must surface this as the typed fail-closed refusal; returning
+		// false here would silently resume ordinary D11 resolution.
+		return s, true
+	}
+	return s, s.Automatic || (s.ID != "" && s.Revision > 0)
 }
 
 func rejectHostDerivedRun(run store.Run) error {
@@ -237,15 +249,20 @@ func rejectHostDerivedRun(run store.Run) error {
 // inheritHostCodexSource carries only persisted routing metadata into the atomic
 // create seam. The seam revalidates the exact worker/source/revision in its own
 // transaction before inserting and freezing the child binding.
-func inheritHostCodexSource(ctx context.Context, run store.Run) context.Context {
-	if !run.CodexCredentialSourceKind.Valid || run.CodexCredentialSourceKind.String != "worker_host" ||
-		!run.CodexCredentialSourceID.Valid || !run.CodexCredentialSourceRevision.Valid || !run.CodexCredentialSourceWorkerID.Valid {
-		return ctx
+func inheritHostCodexSource(ctx context.Context, run store.Run) (context.Context, error) {
+	if !run.CodexCredentialSourceKind.Valid || run.CodexCredentialSourceKind.String != "worker_host" {
+		return ctx, nil
+	}
+	if !run.CodexCredentialSourceID.Valid || run.CodexCredentialSourceID.String == "" ||
+		!run.CodexCredentialSourceRevision.Valid || run.CodexCredentialSourceRevision.Int64 <= 0 ||
+		!run.CodexCredentialSourceWorkerID.Valid || uuid.UUID(run.CodexCredentialSourceWorkerID.Bytes) == uuid.Nil {
+		return ctx, errHostCodexSourceUnavailable
 	}
 	return WithHostCodexSource(ctx, HostCodexSource{
 		ID: run.CodexCredentialSourceID.String, Revision: run.CodexCredentialSourceRevision.Int64,
-		WorkerID: uuid.UUID(run.CodexCredentialSourceWorkerID.Bytes),
-	})
+		WorkerID:  uuid.UUID(run.CodexCredentialSourceWorkerID.Bytes),
+		Inherited: true,
+	}), nil
 }
 
 // harnessResolverStore is the narrow C1-frozen read surface the store-backed resolver
@@ -720,6 +737,9 @@ func (s *Service) createRunAtomic(ctx context.Context, userID uuid.UUID, explici
 	qtx := store.New(tx)
 	var hostWorkerID uuid.UUID
 	if hostRequested {
+		if hostSource.Inherited && (hostSource.ID == "" || hostSource.Revision <= 0 || hostSource.WorkerID == uuid.Nil) {
+			return store.Run{}, resolvedHarness{}, errHostCodexSourceUnavailable
+		}
 		heartbeatCutoff := pgconv.Time(s.now().Add(-s.p.WorkerHeartbeatStale))
 		if hostSource.Automatic {
 			sources, e := qtx.ListReadyWorkerCodexHostSources(ctx, store.ListReadyWorkerCodexHostSourcesParams{UserID: userID, HeartbeatCutoff: heartbeatCutoff})

@@ -256,7 +256,10 @@ func (s *Service) RerunJudge(ctx context.Context, userID uuid.UUID, isAdmin bool
 	// harness as an EXPLICIT selection (replacing the M1 HarnessClaude stopgap), so D11
 	// resolution + the INSERT + (for a Codex target) the binding freeze commit atomically.
 	targetHarness := Harness(target.Harness)
-	ctx = inheritHostCodexSource(ctx, target)
+	ctx, err = inheritHostCodexSource(ctx, target)
+	if err != nil {
+		return store.Run{}, err
+	}
 	judge, err := s.createRunResolved(ctx, target.UserID, &targetHarness, func(q Store, resolved resolvedHarness) (store.Run, error) {
 		return q.CreateJudgeRun(ctx, store.CreateJudgeRunParams{
 			UserID:           target.UserID,

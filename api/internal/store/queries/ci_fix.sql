@@ -107,18 +107,20 @@ SELECT EXISTS (
 SELECT EXISTS (
     SELECT 1 FROM runs
     WHERE repo_id = @repo_id::uuid
+      AND user_id = @user_id::uuid
       AND branch = @branch
       AND codex_credential_source_kind = 'worker_host'
 ) AS host_bound;
 
 -- name: GetWorkerHostCodexRunForBranch :one
--- A CI fix derives from the failed branch's host-bound run. Return its frozen
--- routing tuple so the shared atomic creation seam can validate and retain it.
+-- A CI fix derives from the latest run on its failed branch for the same owner.
+-- The caller inherits only when that latest parent is worker_host; an older host
+-- binding below a newer non-host parent retains the historical typed refusal.
 SELECT * FROM runs
 WHERE repo_id = @repo_id::uuid
+  AND user_id = @user_id::uuid
   AND branch = @branch
-  AND codex_credential_source_kind = 'worker_host'
-ORDER BY created_at DESC
+ORDER BY created_at DESC, id DESC
 LIMIT 1;
 
 -- name: FindCIFixStampTarget :one

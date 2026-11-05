@@ -236,7 +236,8 @@ WHERE id = @id
   AND codex_host_source_revision = @source_revision::bigint
   AND 'codex_host_login_v1' = ANY(protocol_capabilities)
   AND 'codex_harness_v1' = ANY(protocol_capabilities)
-  AND 'codex_runtime_v2' = ANY(protocol_capabilities);
+  AND 'codex_runtime_v2' = ANY(protocol_capabilities)
+FOR SHARE;
 
 -- name: ListReadyWorkerCodexHostSources :many
 SELECT id, codex_host_source_id, codex_host_source_revision FROM workers
