@@ -73,3 +73,16 @@ commitment.
 - The contributor updates this file when a linked PR merges, scope changes, a
   task is parked, or upstream supersedes a proposal. Re-check upstream status
   rather than copying unchecked historical checklists.
+
+## Added owner requests: workflow profiles, AXI and verification
+
+Requested 2026-11-05; design in [fork PRD #10](prds/10-workflow-profiles-axi-verification.md).
+These are planned, not shipped:
+
+| Request | Planned outcome | Boundary |
+|---|---|---|
+| Keep uzi's own harness available | Native workflow remains the default; explicit owner selection for the harness integration | Workflow selection is distinct from Claude/Codex model selection; full external execution versus policy/tool integration needs owner clarification |
+| Integrate the existing harness | Reuse harness-library contract v1, pinned overlays, exact-head checks and metadata-only outcomes | Do not embed project-specific stream/suite scripts or weaken their gates |
+| AXI plugin approach | Explicit, versioned tool selection with compact scoped discovery and contextual commands | No native repo hook discovery, automatic installs or host credential exposure |
+| no-mistakes approach | Exact-head evidence, independent review, deterministic gates and owner decisions | Reuse uzi's workflow first; an actual daemon connector needs single-writer custody and must stay outside untrusted worker execution |
+| Both credential review fixes | Restart-safe refresh uncertainty and current-run-scoped CI-fix eligibility | Authorized separately; work remains on the focused host-login feature branch |
