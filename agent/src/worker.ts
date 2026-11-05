@@ -1091,6 +1091,9 @@ export class Worker {
         if (this.config.geminiCredentialSource?.kind === "worker_host" && this.config.geminiHostReadiness?.()) {
           protocolCapabilities.push("gemini_host_login_v1");
         }
+        if (this.config.grokCredentialSource?.kind === "worker_host" && this.config.grokHostReadiness?.()) {
+          protocolCapabilities.push("grok_host_login_v1");
+        }
         // issue #3639: the settlement capability rides only with the pressure capability (the same guard), so a worker
         // that cannot park for memory never offers to deliver a settlement receipt.
         if (this.config.memoryGuard?.enabled) protocolCapabilities.push("worker_memory_pressure_v1", "worker_memory_authority_claim_v1", "memory_park_settlement_v1");
@@ -1203,6 +1206,8 @@ export class Worker {
         }
         // Gemini readiness is advertised only at registration today. #29 must add
         // heartbeat metadata before a source that goes stale can be withdrawn.
+        // Grok follows the same registration-only, metadata-only foundation. #30
+        // intentionally does not implement a Grok harness or heartbeat withdrawal.
         // PRD #1391 M5: report per-run outbox depth alongside the resource sample. The
         // client sends the array only when the server negotiated `heartbeat_outbox`,
         // so an older api sees a byte-identical heartbeat. Assembled BEFORE the send so

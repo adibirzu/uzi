@@ -110,3 +110,34 @@ response as authoritative. Token semantics are also unverified: the adapter
 maps `input_tokens` conservatively as uncached input, preserves the complete
 provider usage object, and does not normalize `thinking_tokens` until it can
 establish whether it is included in `output_tokens`.
+
+### Grok host-only custody
+
+Grok is a separate explicit `worker_host` source: empty/unset disables it and
+every other source, including `server`, refuses startup. It has no server-held
+credential or API-key path. The source is a dedicated real worker-owned `0700`
+directory plus an absolute, regular, executable CLI that is worker- or
+root-owned, not group/world-writable, and not a symlink. Startup validates only
+that metadata and never reads or lists files below the home; an unsafe or missing
+source refuses startup. Registration reports only `grok_host_login_v1` and the
+future harness must revalidate immediately before use.
+
+Grok is permanently excluded from authorship: `UZI_GROK_ROLES` defaults to the
+strict, unique `reviewer,cross_check` subset; `author` or any other role rejects
+configuration. `UZI_GROK_DAILY_CALL_BUDGET` defaults to 20, accepts only the
+integer range 0..200, and 0 disables calls. These are configuration contracts;
+their runtime enforcement belongs to the later harness issue, which is also the
+first issue allowed to execute a Grok turn.
+
+Verified Grok 1.0.70 CLI evidence defines that later harness boundary, not this
+foundation's test coverage. With a fresh empty `HOME` and no `GROK_HOME`, Grok
+created `HOME/.grok`; `grok -p` reported a message that contains `Not signed in`,
+and `grok models` printed `Default model: grok-4.6`. With a fresh `GROK_HOME` and
+normal `HOME`, `grok models` printed exactly `You are not authenticated.` and
+created `config.toml`, `agent_id`, and `README.md` there. `grok login --help`
+listed `--device-auth` (alias `--device-code`) and `--oauth`. An unauthenticated
+`grok -p <prompt> --output-format json` wrote
+`{"type":"error","message":"Not signed in. To authenticate without a browser, run:\n  grok login --device-code\n..."}`;
+its `message` contains `Not signed in`. A future child receives
+`GROK_HOME=<UZI_GROK_HOST_HOME>` after scrubbing `XAI_API_KEY` and `GROK_AUTH*`
+variables. No Grok execution was tested here.
