@@ -86,6 +86,35 @@ the fork. Release workflows also exist; nobody dispatches them on the fork.
 
 ## Weekly sync
 
+### Existing fork databases
+
+Before deploying the 2026-11-05 sync over an existing database, run the read-only
+collision preflight with `psql` installed and the operator's usual `PGHOST`,
+`PGPORT`, `PGDATABASE`, `PGUSER` and credential configuration:
+
+```sh
+python3 scripts/fork/check-schema-upgrade.py
+```
+
+The former fork migration `00401_codex_host_login` collides with upstream's
+`00401_agent_template_codex_model`. Renumbering the host file to 00404 does not
+upgrade an already-migrated fork database: goose skips upstream 00401 and then
+00404 encounters existing host columns. This was reproduced on disposable
+PostgreSQL 17. Do not reset the database or delete migration history to bypass it.
+
+Exit 0 means only that this particular collision was not detected through target
+migration 404; it does not qualify deployment or check the full schema. Exit 1
+means hold deployment for a reviewed repair, and exit 2 means the check was
+inconclusive. The helper performs one bounded, read-only metadata query, changes
+no state and suppresses database diagnostics that may expose connection details.
+It does not read `.env`, launch a stack, repair migrations or make backups.
+An existing legacy fork database still needs a tested, data-preserving upgrade
+plan before deployment. Unknown/newer schema versions are held for review.
+
+Offline CLI tests: `python3 scripts/fork/check-schema-upgrade.test.py`.
+
+### Create a sync PR
+
 From a clean maintenance clone's repo root (`origin` = fork, `upstream` = parent,
 upstream push URL = `DISABLED-no-upstream-push`):
 
