@@ -51,7 +51,7 @@ export class EpochCleanupUnprovenError extends TrustedExecutionRefusal {
   get safety(): CodexExecutionSafety { return this.#safety; }
 }
 
-export type HarnessKind = "claude" | "codex";
+export type HarnessKind = "claude" | "codex" | "gemini";
 /** Closed set of effort levels a claim may carry. Keep in lockstep with Go `agenttmpl.EffortLevels`.
  *  `runtime` is a server-side preference token that is resolved before the claim and never appears
  *  on one, so it is deliberately absent here. */
