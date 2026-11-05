@@ -151,9 +151,9 @@ UI, an API response, or a log, not even to you. If you need to change it,
 use **Replace value** to paste a new one; there is nothing to reveal or
 edit in place.
 
-## Host-held login (fork, experimental)
+## Host-held login (experimental)
 
-The `adibirzu/uzi` fork has an experimental worker-host custody mode for a
+An optional experimental worker-host custody mode supports a
 dedicated ChatGPT subscription login. It is deliberately opt-in and is not an
 alternative spelling of an imported Codex credential: the login remains on the
 worker host and must never be pasted into uzi.
@@ -222,7 +222,7 @@ exclusive use before manual removal. If it instructs you to remove
 dedicated home remains the guard.
 
 It does not yet provide host meter reports, source-aware parking/cooldown
-admission, Mini native deployment, or a UID-split deployment recipe. See
+admission, native-host deployment, or a UID-split deployment recipe. See
 [ADR-3751](../adr/3751-host-held-codex-login.md) for the custody and rollout
 constraints.
 

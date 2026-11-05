@@ -1,8 +1,8 @@
 # ADR-3751: Experimental host-held Codex login custody
 
-**Status**: Accepted
+**Status**: Proposed for upstream review (implemented experimentally in the fork)
 **Date**: 2026-11-04
-**Issue**: #1, #15
+**Related**: upstream [#229](https://github.com/vtmocanu/uzi/issues/229); fork [#1](https://github.com/adibirzu/uzi/issues/1), [#15](https://github.com/adibirzu/uzi/issues/15)
 
 ## Context
 
@@ -14,7 +14,7 @@ that file as a server credential, a dummy `codex_auth` row, or an implicit
 
 ## Decision
 
-The fork introduces a distinct Codex credential source, `worker_host`, while
+The proposal introduces a distinct Codex credential source, `worker_host`, while
 keeping the authentication mode `subscription`. The default source remains
 `server`. `UZI_CODEX_CREDENTIAL_SOURCE` is strict: only `server` and
 `worker_host` are legal. The latter requires an absolute
@@ -84,6 +84,6 @@ host-bound run with a typed unsupported-derived-run reason before credential
 resolution; it never substitutes a server Codex or Claude credential.
 
 API-host meters, source-aware parking/cooldown admission, and native
-Mini/UID-split deployment are separate milestones. The M1 bridge does not call
+native-host/UID-split deployment are separate milestones. The M1 bridge does not call
 the server release/refresh routes. It must not be approximated by transmitting
 raw auth data or a zero-byte sealed server login.

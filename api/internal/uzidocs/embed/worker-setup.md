@@ -44,8 +44,8 @@ The worker runs agents against your own Anthropic credential, which must already
 
 ## 3. Run the worker
 
-For the fork-only experimental host-held Codex login mode, see [Host-held login
-(fork, experimental)](./codex-credentials.md#host-held-login-fork-experimental).
+For the optional experimental host-held Codex login mode, see [Host-held login
+(fork, experimental)](./codex-credentials.md#host-held-login-experimental).
 It currently validates a dedicated protected file-store `CODEX_HOME` on this
 worker host; never mount or point it at an everyday `~/.codex` directory.
 
