@@ -85,8 +85,9 @@ Derived runs ultimately inherit the same bound worker, source ID, and revision.
 Until that handoff is implemented, M1 rejects every child or successor of a
 host-bound run with a typed unsupported-derived-run reason before credential
 resolution; it never substitutes a server Codex or Claude credential. CI fixes
-identify the current source as the newest matching run, including an issue run
-at its deterministic branch before terminal publication. Source custody and active
+identify safe server publication from the pipeline SHA and authenticated
+completion-head evidence, with conservative refusal when host custody cannot
+be excluded. Source custody and active
 occupancy are read from one snapshot after acquiring the branch lock;
 an older host-bound run does not permanently exclude a reused branch.
 
@@ -96,3 +97,11 @@ raw auth data or a zero-byte sealed server login.
 
 Worker-host credential custody requires the worker/runner UID split. Single-UID
 workers refuse this opt-in before opening the host login.
+
+CI-fix custody is conservative when host runs share a branch. A matching pipeline
+SHA and authenticated server completion head can prove server publication, provided
+no host activity has occurred since that publication. Attempt creation/start times
+are never publisher identity. A failed push/report boundary or a resumed host run
+without a completion receipt prevents exclusion of host custody and retains the
+typed unsupported-derived-run refusal. Later proved server publication can clear
+that uncertainty; a historical host row alone is not a permanent branch ban.

@@ -42,7 +42,7 @@ func TestCIFixBranchEligibilityLiveDB(t *testing.T) {
 	has := func(repo uuid.UUID, branch string) bool {
 		t.Helper()
 		got, err := q.GetCIFixBranchEligibility(ctx, store.GetCIFixBranchEligibilityParams{
-			RepoID: repo, Branch: pgtype.Text{String: branch, Valid: true},
+			PipelineSha: "abc1234", RepoID: repo, Branch: pgtype.Text{String: branch, Valid: true},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -64,15 +64,15 @@ func TestCIFixBranchEligibilityLiveDB(t *testing.T) {
 	}
 	server := seedRun(repo, branch, "server")
 	mustExec(ctx, t, pool, `UPDATE runs SET created_at = now() - interval '1 day' WHERE id = $1`, host)
-	mustExec(ctx, t, pool, `UPDATE runs SET created_at = now() WHERE id = $1`, server)
-	if has(repo, branch) {
-		t.Fatal("historical host login blocked a newer server-backed source run")
+	mustExec(ctx, t, pool, `UPDATE runs SET created_at = now(),status='completed',status_since=now()+interval '1 second' WHERE id = $1`, server)
+	if !has(repo, branch) {
+		t.Fatal("legacy branch metadata without a completion head excluded host custody")
 	}
-	mustExec(ctx, t, pool, `UPDATE runs SET created_at = now() + interval '1 day' WHERE id = $1`, host)
+	mustExec(ctx, t, pool, `UPDATE runs SET created_at = now() + interval '1 day',status_since=now()+interval '2 seconds' WHERE id = $1`, host)
 	if !has(repo, branch) {
 		t.Fatal("current host-backed source run was not refused after branch reuse")
 	}
-	mustExec(ctx, t, pool, `UPDATE runs SET status='completed' WHERE repo_id=$1`, repo)
+	mustExec(ctx, t, pool, `UPDATE runs SET status='completed',status_since=now()-interval '1 hour' WHERE repo_id=$1`, repo)
 	publishing := uuid.New()
 	mustExec(ctx, t, pool, `INSERT INTO runs (id,user_id,repo_id,kind,issue_iid,issue_title,issue_description,status,harness,
 		codex_credential_source_kind,codex_credential_source_id,codex_credential_source_revision,codex_credential_source_worker_id,created_at)
@@ -81,7 +81,7 @@ func TestCIFixBranchEligibilityLiveDB(t *testing.T) {
 	eligibility := func(ref string, host, active bool) {
 		t.Helper()
 		got, err := q.GetCIFixBranchEligibility(ctx, store.GetCIFixBranchEligibilityParams{
-			RepoID: repo, Branch: pgtype.Text{String: ref, Valid: true},
+			PipelineSha: "abc1234", RepoID: repo, Branch: pgtype.Text{String: ref, Valid: true},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -103,8 +103,8 @@ func TestCIFixBranchEligibilityLiveDB(t *testing.T) {
 	serverPublishing := uuid.New()
 	mustExec(ctx, t, pool, `INSERT INTO runs (id,user_id,repo_id,kind,issue_iid,issue_title,issue_description,status,harness,created_at)
 		VALUES ($1,$2,$3,'issue',42,'replacement','d','running','claude',now()+interval '3 days')`, serverPublishing, user, repo)
-	eligibility(branch, false, true)
-	mustExec(ctx, t, pool, `UPDATE runs SET status='completed',branch=$2 WHERE id=$1`, serverPublishing, branch)
-	eligibility(branch, false, false)
+	eligibility(branch, true, true)
+	mustExec(ctx, t, pool, `UPDATE runs SET status='completed',branch=$2,status_since=now()+interval '1 second' WHERE id=$1`, serverPublishing, branch)
+	eligibility(branch, true, false)
 
 }

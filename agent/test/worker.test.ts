@@ -1,3 +1,4 @@
+import { readHostCodexReadiness } from "../src/main.js";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Worker } from "../src/worker.js";
@@ -1194,6 +1195,8 @@ describe("Worker — codex_harness_v1 conditional advertisement (PRD #1332 D3 / 
     const controller = new AbortController();
     const wires: Array<{ path: string; body: Record<string, unknown> }> = [];
     let ready = true;
+    let revision = 1;
+    const source = { sourceId: "11111111-1111-4111-8111-111111111111", get sourceRevision() { return revision; }, ready: () => { revision++; return ready; } };
     const client = new WorkerClient("http://worker-host.test", "fixture-worker-token", "test", nullLogger(), {
       fetch: async (url, init) => {
         wires.push({ path: new URL(String(url)).pathname, body: JSON.parse(String(init?.body)) });
@@ -1201,7 +1204,7 @@ describe("Worker — codex_harness_v1 conditional advertisement (PRD #1332 D3 / 
         return new Response(null, { status: 204 });
       },
     });
-    const worker = new Worker(fakeConfig({ codexHarness: { advertise: true, degraded: false, landlock: "available" }, codexHostSource: { sourceId: "11111111-1111-4111-8111-111111111111", sourceRevision: 1, ready: false }, codexHostReadiness: () => ({ sourceId: "11111111-1111-4111-8111-111111111111", sourceRevision: 1, ready }) }),
+    const worker = new Worker(fakeConfig({ codexHarness: { advertise: true, degraded: false, landlock: "available" }, codexHostSource: { sourceId: "11111111-1111-4111-8111-111111111111", sourceRevision: 1, ready: false }, codexHostReadiness: () => readHostCodexReadiness(source) }),
       client, { ...noResumeRecoveries, execute: async () => {} } as unknown as RunRunner, {} as unknown as ChatRunner,
       noJudge, noReview, recordingLogger().logger, okPreflight);
     const done = worker.run(controller.signal);
@@ -1214,6 +1217,8 @@ describe("Worker — codex_harness_v1 conditional advertisement (PRD #1332 D3 / 
       await done;
     }
     const registration = wires.find(wire => wire.path.endsWith("/register"));
+    assert.equal((registration?.body.codex_host_source as { source_revision?: number })?.source_revision, 2);
+    assert.ok(wires.filter(wire => wire.path.endsWith("/heartbeat")).every(wire => (wire.body.codex_host_source as { source_revision: number }).source_revision > 2));
     assert.equal((registration?.body.codex_host_source as { ready?: boolean } | undefined)?.ready, true);
     assert.ok((registration?.body.protocol_capabilities as string[] | undefined)?.includes("codex_host_login_v1"));
     assert.ok(wires.filter(wire => wire.path.endsWith("/heartbeat")).some(wire => (wire.body.codex_host_source as { ready?: boolean } | undefined)?.ready === false));

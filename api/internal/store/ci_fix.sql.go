@@ -642,30 +642,31 @@ func (q *Queries) FindCIFixStampTarget(ctx context.Context, arg FindCIFixStampTa
 
 const getCIFixBranchEligibility = `-- name: GetCIFixBranchEligibility :one
 WITH matching AS (
-    SELECT codex_credential_source_kind, status, created_at, id
+    SELECT id, codex_credential_source_kind, status, status_since, branch, completion_final_head
     FROM runs
     WHERE repo_id = $1::uuid
-      AND (branch = $2 OR (
-          kind = 'issue' AND branch IS NULL
-          AND status NOT IN ('completed', 'failed', 'cancelled')
-          AND 'agent/issue-' || issue_iid::text = $2
-      ))
+      AND (branch = $2 OR (kind = 'issue' AND 'agent/issue-' || issue_iid::text = $2))
+), server_publication AS (
+    SELECT p.id FROM matching p
+    WHERE p.status = 'completed' AND p.branch = $2
+      AND NULLIF($3::text, '') IS NOT NULL
+      AND p.completion_final_head = $3::text
+      AND p.codex_credential_source_kind IS DISTINCT FROM 'worker_host'
+      AND NOT EXISTS (
+          SELECT 1 FROM matching h
+          WHERE h.codex_credential_source_kind = 'worker_host'
+            AND h.status_since >= p.status_since
+      )
 )
-SELECT COALESCE((
-    SELECT codex_credential_source_kind = 'worker_host'
-    FROM matching
-    ORDER BY created_at DESC, id DESC
-    LIMIT 1
-), false)::boolean AS host_bound,
-EXISTS (
-    SELECT 1 FROM matching
-    WHERE status NOT IN ('completed', 'failed', 'cancelled')
-)::boolean AS active
+SELECT (EXISTS (SELECT 1 FROM matching WHERE codex_credential_source_kind = 'worker_host')
+    AND NOT EXISTS (SELECT 1 FROM server_publication))::boolean AS host_bound,
+EXISTS (SELECT 1 FROM matching WHERE status NOT IN ('completed', 'failed', 'cancelled'))::boolean AS active
 `
 
 type GetCIFixBranchEligibilityParams struct {
-	RepoID uuid.UUID   `json:"repo_id"`
-	Branch pgtype.Text `json:"branch"`
+	RepoID      uuid.UUID   `json:"repo_id"`
+	Branch      pgtype.Text `json:"branch"`
+	PipelineSha string      `json:"pipeline_sha"`
 }
 
 type GetCIFixBranchEligibilityRow struct {
@@ -674,7 +675,7 @@ type GetCIFixBranchEligibilityRow struct {
 }
 
 func (q *Queries) GetCIFixBranchEligibility(ctx context.Context, arg GetCIFixBranchEligibilityParams) (GetCIFixBranchEligibilityRow, error) {
-	row := q.db.QueryRow(ctx, getCIFixBranchEligibility, arg.RepoID, arg.Branch)
+	row := q.db.QueryRow(ctx, getCIFixBranchEligibility, arg.RepoID, arg.Branch, arg.PipelineSha)
 	var i GetCIFixBranchEligibilityRow
 	err := row.Scan(&i.HostBound, &i.Active)
 	return i, err

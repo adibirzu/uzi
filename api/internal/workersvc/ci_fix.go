@@ -180,7 +180,7 @@ func (s *Service) createCIFixRun(ctx context.Context, userID, repoID uuid.UUID, 
 	if err := s.guardDefaultBranch(ctx, row); err != nil {
 		return store.Run{}, err
 	}
-	eligibility, err := s.q.GetCIFixBranchEligibility(ctx, store.GetCIFixBranchEligibilityParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}})
+	eligibility, err := s.q.GetCIFixBranchEligibility(ctx, store.GetCIFixBranchEligibilityParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}, PipelineSha: snapshot.SHA})
 	if err != nil {
 		return store.Run{}, err
 	}
@@ -204,7 +204,7 @@ func (s *Service) createCIFixRun(ctx context.Context, userID, repoID uuid.UUID, 
 		if err := q.LockRunBranch(ctx, repoID, ref); err != nil {
 			return store.Run{}, err
 		}
-		eligibility, err := q.GetCIFixBranchEligibility(ctx, store.GetCIFixBranchEligibilityParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}})
+		eligibility, err := q.GetCIFixBranchEligibility(ctx, store.GetCIFixBranchEligibilityParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}, PipelineSha: snapshot.SHA})
 		if err != nil {
 			return store.Run{}, err
 		}

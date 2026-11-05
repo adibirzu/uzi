@@ -68,6 +68,11 @@ import { createPodEpoch, restoreEpochRuntimeTmpdir } from "./pod-epoch-lock.js";
 import { inspectPodEpochBootstrap } from "./pod-epoch-bootstrap.js";
 import { PodEpochSettlementError, runPodEpochShadow } from "./pod-epoch-reclaim.js";
 
+export function readHostCodexReadiness(source: Pick<HostCodexCredentialSource, "sourceId" | "sourceRevision" | "ready">) {
+  const ready = source.ready();
+  return { sourceId: source.sourceId, sourceRevision: source.sourceRevision, ready };
+}
+
 export function openWorkerHostCodexCredentialSource(home: string, dataDir: string): HostCodexCredentialSource {
   if (!uidSplitActive()) throw new HostCredentialSourceError("unavailable", "host Codex custody requires UID isolation");
   const stateDir = path.join(dataDir, "codex-host-state");
@@ -548,12 +553,8 @@ async function mainBody(): Promise<void> {
   if (config.codexCredentialSource.kind === "worker_host") {
     const source = openWorkerHostCodexCredentialSource(config.codexCredentialSource.home, config.dataDir);
     hostCodexSource = source;
-    config.codexHostSource = {
-      sourceId: source.sourceId,
-      sourceRevision: source.sourceRevision,
-      ready: source.ready(),
-    };
-    config.codexHostReadiness = () => ({ sourceId: source.sourceId, sourceRevision: source.sourceRevision, ready: source.ready() });
+    config.codexHostSource = readHostCodexReadiness(source);
+    config.codexHostReadiness = () => readHostCodexReadiness(source);
     log.info("host Codex credential source validated", {
       source_kind: source.kind,
       source_revision: source.sourceRevision,

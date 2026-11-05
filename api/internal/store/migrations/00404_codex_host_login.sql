@@ -1,4 +1,5 @@
 -- +goose Up
+SET LOCAL lock_timeout = '5s';
 -- Non-secret worker-held Codex login placement metadata.  No credential material,
 -- account identity, or path is stored in these columns.
 ALTER TABLE workers
@@ -9,7 +10,7 @@ ALTER TABLE workers
         (codex_host_source_id IS NULL AND codex_host_source_revision IS NULL AND NOT codex_host_source_ready)
         OR (codex_host_source_id IS NOT NULL AND codex_host_source_revision IS NOT NULL
             AND codex_host_source_revision > 0)
-    );
+    ) NOT VALID;
 
 ALTER TABLE runs
     ADD COLUMN codex_credential_source_kind text,
@@ -19,9 +20,9 @@ ALTER TABLE runs
     ADD CONSTRAINT runs_codex_credential_source_shape CHECK (
         (codex_credential_source_kind IS NULL AND codex_credential_source_id IS NULL
             AND codex_credential_source_revision IS NULL AND codex_credential_source_worker_id IS NULL)
-        OR (codex_credential_source_kind = 'worker_host' AND codex_credential_source_id IS NOT NULL
-            AND codex_credential_source_revision > 0 AND codex_credential_source_worker_id IS NOT NULL)
-    );
+        OR (codex_credential_source_kind IS NOT NULL AND codex_credential_source_kind = 'worker_host' AND codex_credential_source_id IS NOT NULL
+            AND codex_credential_source_revision IS NOT NULL AND codex_credential_source_revision > 0 AND codex_credential_source_worker_id IS NOT NULL)
+    ) NOT VALID;
 
 -- +goose Down
 ALTER TABLE runs
