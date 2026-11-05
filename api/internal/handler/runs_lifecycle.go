@@ -446,7 +446,7 @@ func (h *Handler) writeStartRunError(w http.ResponseWriter, r *http.Request, err
 	case errors.Is(err, workersvc.ErrCodexPoolUnavailable):
 		httpx.JSON(w, http.StatusUnprocessableEntity, codexPoolUnavailableBody())
 	case errors.Is(err, workersvc.ErrHostCodexSourceUnavailable):
-		httpx.JSON(w, http.StatusConflict, map[string]any{"error": "the selected worker-host Codex source is not ready", "code": "host_codex_source_unavailable"})
+		httpx.ErrorReason(w, http.StatusConflict, err.Error(), "host_codex_source_unavailable")
 	case errors.Is(err, workersvc.ErrHostCodexSourceAmbiguous):
 		httpx.JSON(w, http.StatusConflict, map[string]any{"error": "multiple worker-host Codex sources are ready; select one explicitly", "code": "host_codex_source_ambiguous"})
 	case errors.Is(err, workersvc.ErrNoCredentialForHarness):

@@ -9,9 +9,9 @@ import (
 	"github.com/vtmocanu/uzi/api/internal/workersvc"
 )
 
-func TestWriteCIFixCreateErrorHostCodexDerivedRunUnsupported(t *testing.T) {
+func TestWriteCIFixCreateErrorHostCodexSourceUnavailable(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeCIFixCreateError(rec, workersvc.ErrHostCodexDerivedRunUnsupported)
+	writeCIFixCreateError(rec, workersvc.ErrHostCodexSourceUnavailable)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
@@ -19,8 +19,8 @@ func TestWriteCIFixCreateErrorHostCodexDerivedRunUnsupported(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["reason"] != "host_codex_derived_run_unsupported" {
-		t.Fatalf("reason = %v, want host_codex_derived_run_unsupported", body["reason"])
+	if body["reason"] != "host_codex_source_unavailable" {
+		t.Fatalf("reason = %v, want host_codex_source_unavailable", body["reason"])
 	}
 }
 
@@ -42,12 +42,12 @@ func TestWriteCIFixCreateErrorBranchParentChanged(t *testing.T) {
 // These worker-route helpers are the terminal response seam for their respective
 // entry points. Keep the machine-readable conflict reason identical to the manual
 // CI-fix and owner-route mappings.
-func TestHostCodexDerivedRunUnsupportedWorkerRouteMappings(t *testing.T) {
+func TestHostCodexWorkerRouteMappings(t *testing.T) {
 	tests := []struct {
 		name  string
 		write func(http.ResponseWriter)
 	}{
-		{"judge worker", func(w http.ResponseWriter) { writeAdviceClaimRefusal(w, workersvc.ErrHostCodexDerivedRunUnsupported) }},
+		{"judge worker", func(w http.ResponseWriter) { writeAdviceClaimRefusal(w, workersvc.ErrHostCodexSourceUnavailable) }},
 		{"cross-check worker", func(w http.ResponseWriter) { crossCheckError(w, workersvc.ErrHostCodexDerivedRunUnsupported) }},
 	}
 	for _, tt := range tests {
@@ -61,8 +61,12 @@ func TestHostCodexDerivedRunUnsupportedWorkerRouteMappings(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
 			}
-			if body["reason"] != "host_codex_derived_run_unsupported" {
-				t.Fatalf("reason = %v, want host_codex_derived_run_unsupported", body["reason"])
+			want := "host_codex_derived_run_unsupported"
+			if tt.name == "judge worker" {
+				want = "host_codex_source_unavailable"
+			}
+			if body["reason"] != want {
+				t.Fatalf("reason = %v, want %s", body["reason"], want)
 			}
 		})
 	}

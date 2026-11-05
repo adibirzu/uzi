@@ -248,8 +248,8 @@ func (h *Handler) StartRunRework(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, workersvc.ErrBranchInUse):
 			// Issue #1626: an active issue run for the branch's issue, or a CI fix, can hold it.
 			httpx.Error(w, http.StatusConflict, "another run (an issue run or a CI fix) is already working this branch")
-		case errors.Is(err, workersvc.ErrHostCodexDerivedRunUnsupported):
-			httpx.ErrorReason(w, http.StatusConflict, err.Error(), "host_codex_derived_run_unsupported")
+		case errors.Is(err, workersvc.ErrHostCodexSourceUnavailable):
+			httpx.ErrorReason(w, http.StatusConflict, err.Error(), "host_codex_source_unavailable")
 		case errors.Is(err, workersvc.ErrActiveMRReworkExists):
 			httpx.Error(w, http.StatusConflict, "a rework is already running for this merge request")
 		case errors.Is(err, workersvc.ErrCodexPoolUnavailable):

@@ -113,8 +113,8 @@ func writeCIFixCreateError(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusConflict, "an active run already occupies this branch")
 	case errors.Is(err, workersvc.ErrCIFixBranchParentChanged):
 		httpx.ErrorReason(w, http.StatusConflict, err.Error(), "ci_fix_branch_parent_changed")
-	case errors.Is(err, workersvc.ErrHostCodexDerivedRunUnsupported):
-		httpx.ErrorReason(w, http.StatusConflict, err.Error(), "host_codex_derived_run_unsupported")
+	case errors.Is(err, workersvc.ErrHostCodexSourceUnavailable):
+		httpx.ErrorReason(w, http.StatusConflict, err.Error(), "host_codex_source_unavailable")
 	default:
 		slog.Error("create ci-fix run", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "internal error")
