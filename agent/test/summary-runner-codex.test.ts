@@ -45,7 +45,8 @@ for (const pass of ["intent", "plan"] as const) {
       assert.equal(await run(r, { ...base, token: "server-anthropic", claim: { run_id: "run-summary", secrets: { codex: workerHostBinding } } }), null);
       assert.equal(claudeCalls, 0);
       assert.equal(factoryCalls, 0);
-      assert.deepEqual(warnings, [{ reason: "worker_host_credential" }]);
+      // The usage reporter emits its diagnostic before the typed host-source skip.
+      assert.deepEqual(warnings, [{ pass }, { reason: "worker_host_credential" }]);
     });
 
     for (const binding of bindings) {
