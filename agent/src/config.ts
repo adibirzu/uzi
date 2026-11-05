@@ -32,7 +32,7 @@ export type CommandSandboxMode = "off" | "required" | "best-effort";
 
 /**
  * Where a Codex subscription is held. `server` is the existing sealed API-owned
- * credential path. `worker_host` is an explicit fork-only opt-in; it never
+ * credential path. `worker_host` is an explicit opt-in; it never
  * infers a CODEX_HOME from the process environment.
  */
 export type CodexCredentialSource =

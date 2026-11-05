@@ -12,7 +12,7 @@ the fork's deployment or policy choices.
 
 | Change | Evidence | Upstream disposition |
 |---|---|---|
-| Safe fork sync and separate upstream contribution branches | [fork #16](https://github.com/adibirzu/uzi/pull/16), [#13](https://github.com/adibirzu/uzi/issues/13) closed | Fork maintenance only; excluded from upstream feature branches |
+| Safe fork sync and separate upstream contribution branches | [fork #16](https://github.com/adibirzu/uzi/pull/16), [fork #13](https://github.com/adibirzu/uzi/issues/13) closed | Fork maintenance only; excluded from upstream feature branches |
 | Dashboard onboarding accepts usable Claude or Codex credentials | [fork #17](https://github.com/adibirzu/uzi/pull/17) merged | Small independent bug-fix candidate; separate from credential custody |
 | Experimental worker-host Codex subscription login, M1 | [fork #21](https://github.com/adibirzu/uzi/pull/21) merged | Proposed optional feature; upstream design agreement pending |
 
@@ -31,20 +31,20 @@ work must be checked again before implementation.
 
 | Stage | Contributor work | Fork tracking | Upstream alignment / decision needed |
 |---|---|---|---|
-| Now | Sync upstream through a merge PR; reconcile overlapping snapshot fixes and explain failing CI | [#22](https://github.com/adibirzu/uzi/issues/22), [PR #23](https://github.com/adibirzu/uzi/pull/23) | Upstream [#3947](https://github.com/vtmocanu/uzi/pull/3947) already supplies the fixed snapshot projection; avoid a duplicate fix |
-| First | Qualify Codex subscription execution with three real sandbox runs, account meters and limit parking; verify API-key fallback only when opted in | [#1](https://github.com/adibirzu/uzi/issues/1), [#15](https://github.com/adibirzu/uzi/issues/15) | [#229](https://github.com/vtmocanu/uzi/issues/229), [#1209](https://github.com/vtmocanu/uzi/issues/1209); host-held mode needs an explicit upstream custody decision |
-| First | Host-source list/picker and exact binding inheritance for successor/child runs | [#18](https://github.com/adibirzu/uzi/issues/18), [#19](https://github.com/adibirzu/uzi/issues/19) | Follow-up to the optional host-login proposal; not included in M1 |
-| First | Subscription-first routing, usage-aware parking and per-subscription budgets | [#15](https://github.com/adibirzu/uzi/issues/15) | Extend existing account-pool/admission work; upstream core must retain server-held credential support |
-| Next | Gemini CLI feasibility and subscription harness; Grok CLI feasibility with checker-only default and budget caps | [#5](https://github.com/adibirzu/uzi/issues/5), [#11](https://github.com/adibirzu/uzi/issues/11) | [#229](https://github.com/vtmocanu/uzi/issues/229); each harness must demonstrate guardrail enforcement before enabling writes; deployment-specific adapters remain in the fork |
-| Next | Family-aware cross-check and independent-provider judge | [#6](https://github.com/adibirzu/uzi/issues/6) | [#229](https://github.com/vtmocanu/uzi/issues/229), existing cross-check ADRs; preserve today's two-harness behavior |
-| Next | Generic Responses-provider credentials and endpoint allowlist | [#2](https://github.com/adibirzu/uzi/issues/2) | [#229](https://github.com/vtmocanu/uzi/issues/229), D10 and endpoint capability probe; design agreement before implementation |
-| Later | Read-only cross-provider roles first, then named role profiles and cheaper-model routing | [#7](https://github.com/adibirzu/uzi/issues/7) | [#727](https://github.com/vtmocanu/uzi/issues/727), [#229](https://github.com/vtmocanu/uzi/issues/229); no shared-tree mutating subagents in the first slice |
-| Later | Owner-approved per-repo command gates before publication | [#8](https://github.com/adibirzu/uzi/issues/8) | Separate proposal; preserve sandbox and publication guardrails |
-| Later | Owner-selectable AGENTS.md instructions source | [#9](https://github.com/adibirzu/uzi/issues/9) | ADR-0246 deliberately chose CLAUDE.md; obtain maintainer direction before changing it |
-| Later | GitHub laptop quickstart and multi-provider documentation, measured to first PR | [#12](https://github.com/adibirzu/uzi/issues/12) | Coordinate with [#3760](https://github.com/vtmocanu/uzi/issues/3760) and setup follow-ups |
-| Fork only | External orchestrator dispatch, outcome ledger and local merge policy | [#10](https://github.com/adibirzu/uzi/issues/10) | No fleet configuration, private endpoints or local policy in upstream changes |
-| Cleanup | Reconcile deferred review findings with merged code | [#20](https://github.com/adibirzu/uzi/issues/20) | Verify each item; do not treat unchecked boxes as proof the issue still exists |
-| On hold | Metered xAI API and Gemini gateway routes | [#3](https://github.com/adibirzu/uzi/issues/3), [#4](https://github.com/adibirzu/uzi/issues/4) | Secondary and opt-in; not the current subscription-first implementation path |
+| Now | Sync upstream through a merge PR; reconcile overlapping snapshot fixes and explain failing CI | [fork #22](https://github.com/adibirzu/uzi/issues/22), [PR #23](https://github.com/adibirzu/uzi/pull/23) | Upstream [#3947](https://github.com/vtmocanu/uzi/pull/3947) already supplies the fixed snapshot projection; avoid a duplicate fix |
+| First | Qualify Codex subscription execution with three real sandbox runs, account meters and limit parking; verify API-key fallback only when opted in | [fork #1](https://github.com/adibirzu/uzi/issues/1), [fork #15](https://github.com/adibirzu/uzi/issues/15) | [#229](https://github.com/vtmocanu/uzi/issues/229), [#1209 (closed)](https://github.com/vtmocanu/uzi/issues/1209); host-held mode needs an explicit upstream custody decision |
+| First | Host-source list/picker and exact binding inheritance for successor/child runs | [fork #18](https://github.com/adibirzu/uzi/issues/18), [fork #19](https://github.com/adibirzu/uzi/issues/19) | Follow-up to the optional host-login proposal; not included in M1 |
+| First | Subscription-first routing, usage-aware parking and per-subscription budgets | [fork #15](https://github.com/adibirzu/uzi/issues/15) | Extend existing account-pool/admission work; upstream core must retain server-held credential support |
+| Next | Gemini CLI feasibility and subscription harness; Grok CLI feasibility with checker-only default and budget caps | [fork #5](https://github.com/adibirzu/uzi/issues/5), [fork #11](https://github.com/adibirzu/uzi/issues/11) | [#229](https://github.com/vtmocanu/uzi/issues/229); each harness must demonstrate guardrail enforcement before enabling writes; deployment-specific adapters remain in the fork |
+| Next | Family-aware cross-check and independent-provider judge | [fork #6](https://github.com/adibirzu/uzi/issues/6) | [#229](https://github.com/vtmocanu/uzi/issues/229), existing cross-check ADRs; preserve today's two-harness behavior |
+| Next | Generic Responses-provider credentials and endpoint allowlist | [fork #2](https://github.com/adibirzu/uzi/issues/2) | [#229](https://github.com/vtmocanu/uzi/issues/229), D10 and endpoint capability probe; design agreement before implementation |
+| Later | Read-only cross-provider roles first, then named role profiles and cheaper-model routing | [fork #7](https://github.com/adibirzu/uzi/issues/7) | [#727](https://github.com/vtmocanu/uzi/issues/727), [#229](https://github.com/vtmocanu/uzi/issues/229); no shared-tree mutating subagents in the first slice |
+| Later | Owner-approved per-repo command gates before publication | [fork #8](https://github.com/adibirzu/uzi/issues/8) | Separate proposal; preserve sandbox and publication guardrails |
+| Later | Owner-selectable AGENTS.md instructions source | [fork #9](https://github.com/adibirzu/uzi/issues/9) | ADR-0246 deliberately chose CLAUDE.md; obtain maintainer direction before changing it |
+| Later | GitHub laptop quickstart and multi-provider documentation, measured to first PR | [fork #12](https://github.com/adibirzu/uzi/issues/12) | Coordinate with [#3760](https://github.com/vtmocanu/uzi/issues/3760) and setup follow-ups |
+| Fork only | External orchestrator dispatch, outcome ledger and local merge policy | [fork #10](https://github.com/adibirzu/uzi/issues/10) | No fleet configuration, private endpoints or local policy in upstream changes |
+| Cleanup | Reconcile deferred review findings with merged code | [fork #20](https://github.com/adibirzu/uzi/issues/20) | Verify each item; do not treat unchecked boxes as proof the issue still exists |
+| On hold | Metered xAI API and Gemini gateway routes | [fork #3](https://github.com/adibirzu/uzi/issues/3), [fork #4](https://github.com/adibirzu/uzi/issues/4) | Secondary and opt-in; not the current subscription-first implementation path |
 
 ## Upstream roadmap: observed, not owned here
 

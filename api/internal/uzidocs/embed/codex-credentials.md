@@ -191,7 +191,10 @@ It never auto-discovers `HOME` or `CODEX_HOME`.
 Its host source identifier is a random opaque worker-state value, not a hash of
 the path or any credential.
 
-For a run created with `harness:"codex"` and
+M1 supports issue runs created through the REST API only; the CLI, web picker,
+prompt/task creates and schedules do not select this source yet.
+
+For an issue run created with `harness:"codex"` and
 `codex_credential_source:{"kind":"worker_host"}`, uzi atomically selects the
 owner's one ready host source. Supplying its opaque id and positive revision
 selects that exact source instead. No ready source, or more than one, is refused
@@ -223,7 +226,7 @@ dedicated home remains the guard.
 
 It does not yet provide host meter reports, source-aware parking/cooldown
 admission, native-host deployment, or a UID-split deployment recipe. See
-[ADR-3751](../adr/3751-host-held-codex-login.md) for the custody and rollout
+[ADR-229](../adr/0229-host-held-codex-login.md) for the custody and rollout
 constraints.
 
 ## Status legend

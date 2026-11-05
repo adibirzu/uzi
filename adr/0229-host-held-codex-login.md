@@ -1,4 +1,4 @@
-# ADR-3751: Experimental host-held Codex login custody
+# ADR-229: Experimental host-held Codex login custody
 
 **Status**: Proposed for upstream review (implemented experimentally in the fork)
 **Date**: 2026-11-04
@@ -83,7 +83,6 @@ Until that handoff is implemented, M1 rejects every child or successor of a
 host-bound run with a typed unsupported-derived-run reason before credential
 resolution; it never substitutes a server Codex or Claude credential.
 
-API-host meters, source-aware parking/cooldown admission, and native
-native-host/UID-split deployment are separate milestones. The M1 bridge does not call
+API-host meters, source-aware parking/cooldown admission, and native-host/UID-split deployment are separate milestones. The M1 bridge does not call
 the server release/refresh routes. It must not be approximated by transmitting
 raw auth data or a zero-byte sealed server login.

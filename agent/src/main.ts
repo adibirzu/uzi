@@ -533,7 +533,7 @@ async function mainBody(): Promise<void> {
   installWorkerLifetime(await acquireWorkerLifetime(config.dataDir, { signal: controller.signal }));
   log.info("worker lifetime lock acquired");
 
-  // Fork-only host custody is intentionally an explicit startup operation. The
+  // Opt-in host custody is intentionally an explicit startup operation. The
   // default server source never reaches this branch, so it performs no ambient
   // CODEX_HOME/HOME read. The source itself retains no credential material.
   let hostCodexSource: HostCodexCredentialSource | undefined;
