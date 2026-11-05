@@ -583,17 +583,10 @@ at worker startup or the worker refuses to start. Registration advertises only
 opaque `grok_host_login_v1` metadata; the later harness must revalidate the
 boundary immediately before use.
 
-The verified Grok 1.0.70 CLI evidence for that later harness is: with a fresh
-`HOME` and no `GROK_HOME`, `grok` created `HOME/.grok` and `grok -p` reported a
-message that contains `Not signed in`; `grok models` printed `Default model:
-grok-4.6`. With a fresh `GROK_HOME` and normal `HOME`, `grok models` printed
-exactly `You are not authenticated.` and created `config.toml`, `agent_id`, and
-`README.md` in `GROK_HOME`. `grok login --help` listed `--device-auth` (alias
-`--device-code`) and `--oauth`. An unauthenticated `grok -p <prompt>
---output-format json` wrote an error object whose `message` contains `Not signed
-in`. The child must receive `GROK_HOME=<UZI_GROK_HOST_HOME>` and scrub
-`XAI_API_KEY` and `GROK_AUTH*` variables. These facts document the future
-harness contract only; turn execution was not tested in this foundation.
+The verified Grok CLI behaviour that bounds the later harness (home and
+`GROK_HOME` handling, unauthenticated output, environment scrubbing) is recorded
+in `adr/3751-host-held-codex-login.md`; turn execution was not tested in this
+foundation.
 
 ### Worker Go concurrency defaults
 
