@@ -39,8 +39,10 @@ test("Gemini host source rejects symlink homes, wrong modes, missing or unsafe C
   assert.equal(source.ready(), false);
   fs.writeFileSync(f.cli, "#!/bin/sh\n", { mode: 0o600 });
   assert.equal(source.ready(), false);
-  fs.writeFileSync(f.cli, "#!/bin/sh\n", { mode: 0o777 });
-  assert.equal(source.ready(), false);
+  fs.chmodSync(f.cli, 0o777); // explicit chmod: the create mode is masked by umask
+  assert.equal(source.ready(), false, "group/world-writable CLI is rejected");
+  fs.chmodSync(f.cli, 0o720);
+  assert.equal(source.ready(), false, "group-writable CLI is rejected");
   fs.chmodSync(f.cli, 0o700);
   fs.unlinkSync(f.cli);
   fs.symlinkSync("/bin/sh", f.cli);
@@ -54,8 +56,14 @@ test("Gemini host source rejects a home owned by another user", t => {
   const f = fixture(t);
   const realGetuid = process.getuid;
   assert.ok(realGetuid, "Node worker platforms provide getuid");
+  // A root-owned, non-writable system binary keeps the CLI check passing under the fake uid,
+  // so only the home ownership check can reject.
+  const rootCli = fs.realpathSync("/bin/sh");
+  const st = fs.statSync(rootCli);
+  if (st.uid !== 0 || (st.mode & 0o022) !== 0) return t.skip("no root-owned /bin/sh target");
+  assert.equal(openHostGeminiSource(f.home, rootCli).ready(), true, "control: root-owned CLI passes");
   t.mock.method(process as typeof process & { getuid: () => number }, "getuid", () => realGetuid() + 1);
-  assert.equal(openHostGeminiSource(f.home, f.cli).ready(), false);
+  assert.equal(openHostGeminiSource(f.home, rootCli).ready(), false);
 });
 
 test("gemini host source never reads files inside the host home", t => {
