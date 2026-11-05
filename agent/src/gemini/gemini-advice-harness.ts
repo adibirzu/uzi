@@ -214,7 +214,7 @@ export class GeminiAdviceHarness implements AdviceHarness {
         const text = finalResult ?? deltas.join("");
         const end = finalError !== undefined
           ? terminal("failed", "protocol", [finalError])
-          : code === 0 ? terminal("success", "success", []) : terminal("failed", "protocol", [`Gemini CLI exited ${code ?? "by signal"}`]);
+          : code === 0 ? (text.trim() ? terminal("success", "success", []) : terminal("failed", "protocol", ["Gemini returned an empty answer"])) : terminal("failed", "protocol", [`Gemini CLI exited ${code ?? "by signal"}`]);
         finish({ text, end: { kind: "terminal", terminal: end } });
       });
     });

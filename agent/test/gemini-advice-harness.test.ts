@@ -80,6 +80,14 @@ test("Gemini advice rejects model flag injection", async t => {
   await assert.rejects(f.harness.run(request({ model: "--dangerously-skip-permissions" }), policy), (error: unknown) => error instanceof GeminiAdviceError && error.failure.category === "model");
 });
 
+test("Gemini advice treats an empty successful final as a protocol failure", async t => {
+  const empty = fixture(t, "printf '%s\\n' '{\"type\":\"result\"}'");
+  const result = await empty.harness.run(request(), policy);
+  assert.equal(result.end.kind, "terminal");
+  assert.equal(result.end.terminal.outcome, "failed");
+  assert.equal(result.end.terminal.subtype, "protocol");
+});
+
 test("Gemini advice maps non-zero final and pre-stream sign-in output to terminal failures", async t => {
   const nonzero = fixture(t, "printf '%s\\n' '{\"type\":\"result\"}'\nexit 9");
   const nonzeroResult = await nonzero.harness.run(request(), policy);
