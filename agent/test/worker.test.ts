@@ -1280,6 +1280,38 @@ describe("Worker — codex_harness_v1 conditional advertisement (PRD #1332 D3 / 
       assert.equal(wire.body.codex_host_source, undefined);
     }
   });
+
+  it("advertises Gemini host login only while its local source is ready", async () => {
+    for (const [sourceConfigured, ready] of [[true, true], [true, false], [false, true]] as const) {
+      const controller = new AbortController();
+      let registration: Record<string, unknown> | undefined;
+      const client = new WorkerClient("http://worker-host.test", "fixture-worker-token", "test", nullLogger(), {
+        fetch: async (url, init) => {
+          if (String(url).endsWith("/register")) {
+            registration = JSON.parse(String(init?.body));
+            return Response.json({ worker_id: "worker-1", protocol_features: [] });
+          }
+          return new Response(null, { status: 204 });
+        },
+      });
+      const worker = new Worker(fakeConfig({
+        geminiCredentialSource: sourceConfigured ? { kind: "worker_host", home: "/host/gemini", cli: "/usr/local/bin/gemini" } : undefined,
+        geminiHostReadiness: () => ready,
+      }), client, { ...noResumeRecoveries, execute: async () => {} } as unknown as RunRunner,
+      {} as unknown as ChatRunner, noJudge, noReview, recordingLogger().logger, okPreflight);
+      const done = worker.run(controller.signal);
+      try {
+        for (let i = 0; i < 300 && !registration; i++) await tick();
+        assert.equal(
+          (registration?.protocol_capabilities as string[] | undefined)?.includes("gemini_host_login_v1"),
+          sourceConfigured && ready,
+        );
+      } finally {
+        controller.abort();
+        await done;
+      }
+    }
+  });
 });
 
 it("routes cross-check before review and ordinary runners in an ordinary slot and drains cancellation", async () => {

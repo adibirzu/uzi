@@ -39,6 +39,14 @@ export type CodexCredentialSource =
   | { kind: "server" }
   | { kind: "worker_host"; home: string };
 
+/**
+ * Gemini has no server-held credential path. Its host login is therefore an explicit
+ * opt-in, or absent entirely; it never falls back to a different custody mode.
+ */
+export type GeminiCredentialSource =
+  | { kind: "worker_host"; home: string; cli: string }
+  | undefined;
+
 export interface Config {
   recoveryDecodedLimitBytes: number;
   apiUrl: string;
@@ -270,6 +278,10 @@ export interface Config {
   codexCommandSandbox: CommandSandboxMode;
   /** Explicit Codex credential custody. Absent remains the server-owned path. */
   codexCredentialSource: CodexCredentialSource;
+  /** Explicit Gemini host-login custody; absent means Gemini is disabled. */
+  geminiCredentialSource: GeminiCredentialSource;
+  /** Local-only Gemini host-login readiness hook; never serialized or model-reachable. */
+  geminiHostReadiness?: () => boolean;
   /** Non-secret registration metadata populated only after host custody preflight. */
   codexHostSource?: { sourceId: string; sourceRevision: number; ready: boolean };
   /** Local-only revalidation hook; never serialized and never invoked by model code. */
@@ -523,6 +535,24 @@ function parseCodexCredentialSource(env: NodeJS.ProcessEnv): CodexCredentialSour
   return { kind: "worker_host", home: path.resolve(home) };
 }
 
+/** Parse Gemini's host-only custody switch; unlike Codex, no server fallback exists. */
+function parseGeminiCredentialSource(env: NodeJS.ProcessEnv): GeminiCredentialSource {
+  const source = env.UZI_GEMINI_CREDENTIAL_SOURCE?.trim().toLowerCase();
+  if (source === undefined || source === "") return undefined;
+  if (source !== "worker_host") {
+    throw new Error(`invalid UZI_GEMINI_CREDENTIAL_SOURCE ${JSON.stringify(env.UZI_GEMINI_CREDENTIAL_SOURCE)} (expected "worker_host")`);
+  }
+  const home = env.UZI_GEMINI_HOST_HOME?.trim();
+  if (!home || !path.isAbsolute(home)) {
+    throw new Error("UZI_GEMINI_HOST_HOME must be an absolute path when UZI_GEMINI_CREDENTIAL_SOURCE=worker_host");
+  }
+  const cli = env.UZI_GEMINI_CLI?.trim();
+  if (!cli || !path.isAbsolute(cli)) {
+    throw new Error("UZI_GEMINI_CLI must be an absolute path when UZI_GEMINI_CREDENTIAL_SOURCE=worker_host");
+  }
+  return { kind: "worker_host", home: path.resolve(home), cli: path.resolve(cli) };
+}
+
 /** Default per-run command-cache rotation threshold (4 GiB). */
 const DEFAULT_CODEX_COMMAND_CACHE_RUN_BYTES = 4294967296;
 
@@ -722,6 +752,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     // and refuses to start). Default `off`: Landlock is never applied.
     codexCommandSandbox: parseCommandSandbox(env.UZI_CODEX_COMMAND_SANDBOX),
     codexCredentialSource: parseCodexCredentialSource(env),
+    geminiCredentialSource: parseGeminiCredentialSource(env),
     codexCommandCacheRunBytes: parseCacheRunBytes(env.UZI_CODEX_COMMAND_CACHE_RUN_BYTES),
     // Populated by main.ts after the async receipt + Landlock probes; the sync parse
     // cannot probe, so the default is "do not advertise" until startup resolves it.

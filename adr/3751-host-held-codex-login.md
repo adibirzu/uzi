@@ -87,3 +87,11 @@ API-host meters, source-aware parking/cooldown admission, and native
 Mini/UID-split deployment are separate milestones. The M1 bridge does not call
 the server release/refresh routes. It must not be approximated by transmitting
 raw auth data or a zero-byte sealed server login.
+
+### Gemini host-only custody
+
+Gemini uses the same explicit `worker_host` boundary, but has no server-held
+credential source and therefore no fallback. A configured Gemini source must
+pass its local readiness check during worker startup or the worker refuses to
+start. Its registration advertises only opaque `gemini_host_login_v1` metadata;
+the later Gemini harness must revalidate the CLI boundary immediately before use.

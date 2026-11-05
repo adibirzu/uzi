@@ -204,6 +204,17 @@ func TestFilterProtocol_KeepsCodexHostLoginV1(t *testing.T) {
 	}
 }
 
+func TestFilterProtocol_KeepsGeminiHostLoginV1(t *testing.T) {
+	got := FilterProtocol([]string{CodexRuntimeV2, GeminiHostLoginV1, CodexHostLoginV1})
+	want := []string{CodexHostLoginV1, GeminiHostLoginV1, CodexRuntimeV2}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("FilterProtocol = %v, want %v", got, want)
+	}
+	if got := Filter([]string{GeminiHostLoginV1}); len(got) != 0 {
+		t.Errorf("Filter(%q) = %v, want empty", GeminiHostLoginV1, got)
+	}
+}
+
 func TestFilterProtocol_KeepsCodexCompletionInterlockV1(t *testing.T) {
 	if got := FilterProtocol([]string{CodexCompletionInterlockV1, CodexHarnessV1}); !reflect.DeepEqual(got, []string{CodexHarnessV1, CodexCompletionInterlockV1}) {
 		t.Fatalf("FilterProtocol = %v", got)

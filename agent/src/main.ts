@@ -52,6 +52,7 @@ import { resolveDockerWiring, dockerSidecarExpected, type DockerWiring } from ".
 import { probeCodexRuntime } from "./codex/codex-runtime-probe.js";
 import { landlockProbeForMode, resolveCodexHarnessAvailability } from "./codex/codex-capability.js";
 import { HostCredentialSourceError, openHostCodexCredentialSource, type HostCodexCredentialSource } from "./codex/host-credential-source.js";
+import { openHostGeminiSource } from "./gemini/host-login-source.js";
 import { reapCodexCommandOrphans, type ReapOrphansResult } from "./codex/launcher.js";
 import { SECRET_PATH_PREFIXES, workerSecretDenyPaths } from "./guardrails.js";
 import type {
@@ -550,6 +551,14 @@ async function mainBody(): Promise<void> {
       source_kind: source.kind,
       source_revision: source.sourceRevision,
     });
+  }
+
+  if (config.geminiCredentialSource?.kind === "worker_host") {
+    const source = openHostGeminiSource(config.geminiCredentialSource.home, config.geminiCredentialSource.cli);
+    const ready = source.ready();
+    if (!ready) throw new Error("host Gemini login source is not ready");
+    config.geminiHostReadiness = () => source.ready();
+    log.info("host Gemini login source validated", { source_kind: source.kind, ready });
   }
 
   // Issue #3153: when TMPDIR lives under the (now persistent) `<dataDir>/runner`, confirm it is a
