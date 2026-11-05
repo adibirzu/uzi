@@ -176,15 +176,33 @@ func ResetStateDigest(r store.Run) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// reconciliationSnapshot keeps JSONB definitions readable in the owner audit.
+// reconciliationSnapshot keeps the reconciliation facts readable in the owner
+// audit. This is deliberately an allowlist: a Run has accumulated operational
+// placement and harness-selection fields which neither affect a reset nor help
+// explain one, and can crowd the bounded audit record out entirely.
 func reconciliationSnapshot(r store.Run) ([]byte, error) {
-	encoded, err := json.Marshal(r)
-	if err != nil {
-		return nil, err
-	}
-	var snapshot map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &snapshot); err != nil {
-		return nil, err
+	snapshot := map[string]any{
+		"id":                          r.ID,
+		"repo_id":                     r.RepoID,
+		"issue_iid":                   r.IssueIid,
+		"kind":                        r.Kind,
+		"status":                      r.Status,
+		"status_since":                r.StatusSince,
+		"worker_id":                   r.WorkerID,
+		"session_id":                  r.SessionID,
+		"claim_generation":            r.ClaimGeneration,
+		"claim_released_at":           r.ClaimReleasedAt,
+		"gate_revision":               r.GateRevision,
+		"gate_presentation_id":        r.GatePresentationID,
+		"gate_payload_digest":         r.GatePayloadDigest,
+		"contract_revision":           r.ContractRevision,
+		"completion_contract_version": r.CompletionContractVersion,
+		"scope_ceiling":               r.ScopeCeiling,
+		"stop_kind":                   r.StopKind,
+		"stop_reason":                 r.StopReason,
+		"agent_source":                r.AgentSource,
+		"agent_exclusions":            json.RawMessage(jsonOrNull(r.AgentExclusions)),
+		"required_capabilities":       r.RequiredCapabilities,
 	}
 	for key, raw := range map[string][]byte{
 		"milestones_frozen":      r.MilestonesFrozen,
@@ -197,11 +215,6 @@ func reconciliationSnapshot(r store.Run) ([]byte, error) {
 	} {
 		snapshot[key] = json.RawMessage(jsonOrNull(raw))
 	}
-	// Placement metadata cannot affect reconciliation.
-	delete(snapshot, "codex_credential_source_kind")
-	delete(snapshot, "codex_credential_source_id")
-	delete(snapshot, "codex_credential_source_revision")
-	delete(snapshot, "codex_credential_source_worker_id")
 	return json.Marshal(snapshot)
 }
 

@@ -11,9 +11,20 @@ import (
 )
 
 func TestReconciliationSnapshotOmitsHostCodexPlacementMetadata(t *testing.T) {
+	milestones := make([]map[string]string, 96)
+	for i := range milestones {
+		milestones[i] = map[string]string{
+			"id":    "M" + strings.Repeat("x", 8),
+			"title": strings.Repeat("x", 48),
+		}
+	}
+	frozen, err := json.Marshal(milestones)
+	if err != nil {
+		t.Fatal(err)
+	}
 	run := store.Run{
 		ID:                            uuid.New(),
-		MilestonesFrozen:              []byte(`"` + strings.Repeat("x", 6000) + `"`),
+		MilestonesFrozen:              frozen,
 		CodexCredentialSourceKind:     pgtype.Text{String: "worker_host", Valid: true},
 		CodexCredentialSourceID:       pgtype.Text{String: uuid.NewString(), Valid: true},
 		CodexCredentialSourceRevision: pgtype.Int8{Int64: 1, Valid: true},
