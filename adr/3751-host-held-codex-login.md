@@ -97,7 +97,22 @@ Gemini uses the same explicit `worker_host` boundary, but has no server-held
 credential source and therefore no fallback. A configured Gemini source must
 pass its local readiness check during worker startup or the worker refuses to
 start. Its registration advertises only opaque `gemini_host_login_v1` metadata;
-the later Gemini harness must revalidate the CLI boundary immediately before use.
+the Gemini advice harness (one-shot, tool-less passes via `agy`) revalidates the CLI boundary immediately before each spawn.
+The login is HOME-scoped: an operator runs `HOME="$UZI_GEMINI_HOST_HOME" agy`
+and signs in before starting the worker. It remains an open question whether agy
+also stores tokens in the macOS keychain shared across HOME directories.
+
+Against the installed agy 1.5.1 CLI, the advice argv was verified to parse with
+`--print=`, stream-json input/output, an effort-suffixed model, `--sandbox`, and
+`--disable-slash-commands`; it deliberately never uses `--mode plan`. An
+unauthenticated probe verified the terminal `event: "result"` object shape and
+its authentication failure diagnostics. Signed-in success status spelling,
+streaming delta event shapes, and HOME-versus-keychain credential behavior remain
+unverified; the parser tolerates unknown delta events and treats the final result
+response as authoritative. Token semantics are also unverified: the adapter
+maps `input_tokens` conservatively as uncached input, preserves the complete
+provider usage object, and does not normalize `thinking_tokens` until it can
+establish whether it is included in `output_tokens`.
 
 ### Grok host-only custody
 
