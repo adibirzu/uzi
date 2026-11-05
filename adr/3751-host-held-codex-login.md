@@ -94,7 +94,7 @@ Gemini uses the same explicit `worker_host` boundary, but has no server-held
 credential source and therefore no fallback. A configured Gemini source must
 pass its local readiness check during worker startup or the worker refuses to
 start. Its registration advertises only opaque `gemini_host_login_v1` metadata;
-the later Gemini harness must revalidate the CLI boundary immediately before use.
+the Gemini advice harness (one-shot, tool-less passes via `agy`) revalidates the CLI boundary immediately before each spawn.
 The login is HOME-scoped: an operator runs `HOME="$UZI_GEMINI_HOST_HOME" agy`
 and signs in before starting the worker. It remains an open question whether agy
 also stores tokens in the macOS keychain shared across HOME directories.
