@@ -106,4 +106,7 @@ unauthenticated probe verified the terminal `event: "result"` object shape and
 its authentication failure diagnostics. Signed-in success status spelling,
 streaming delta event shapes, and HOME-versus-keychain credential behavior remain
 unverified; the parser tolerates unknown delta events and treats the final result
-response as authoritative.
+response as authoritative. Token semantics are also unverified: the adapter
+maps `input_tokens` conservatively as uncached input, preserves the complete
+provider usage object, and does not normalize `thinking_tokens` until it can
+establish whether it is included in `output_tokens`.

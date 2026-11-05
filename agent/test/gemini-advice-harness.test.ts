@@ -42,10 +42,13 @@ test("Gemini advice succeeds with stream-json text and safe argv", async t => {
   assert.match(argv, /--output-format\nstream-json/);
   assert.match(argv, /--model=gemini-3\.8-flash-high/);
   assert.doesNotMatch(argv, /--effort/);
-  assert.doesNotMatch(argv, /^--mode$/m);
+  assert.match(argv, /^--sandbox$/m);
+  assert.match(argv, /^--disable-slash-commands$/m);
+  assert.doesNotMatch(argv, /(?:^|\n)--mode(?:=|\n|$)/);
   assert.doesNotMatch(argv, /--dangerously-skip-permissions/);
   assert.deepEqual(JSON.parse(fs.readFileSync(`${f.capture}.stdin`, "utf8")), { type: "user", content: "system\n\nprompt" });
-  assert.deepEqual(result.usage?.tokens, { inputTotalTokens: 2, outputTokens: 3, inputCacheReadTokens: 1 });
+  assert.deepEqual(result.usage?.tokens, { inputUncachedTokens: 2, outputTokens: 3, inputCacheReadTokens: 1 });
+  assert.deepEqual(result.usage?.wire?.usage, { input_tokens: 2, output_tokens: 3, thinking_tokens: 0, cache_read_tokens: 1, total_tokens: 6 });
 });
 
 test("Gemini advice sends prompts over stdin rather than argv beyond Linux MAX_ARG_STRLEN", async t => {
@@ -106,36 +109,56 @@ test("Gemini advice maps non-zero final and pre-stream sign-in output to termina
 
 test("Gemini advice recognizes the real agy 1.5.1 auth-failure result frame", async t => {
   const line = '{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"finished_reason":"error"}}';
-  const f = fixture(t, `printf '%s\\n' 'Error: authentication required. Run agy to log in, then retry.' >&2\nprintf '%s\\n' 'error: authentication failed or timed out' >&2\nprintf '%s\\n' '${line}'\nexit 1`);
+  const f = fixture(t, `printf '%s\\n' "Error: authentication required. Run 'agy' to log in, then retry." >&2\nprintf '%s\\n' 'error: authentication failed or timed out' >&2\nprintf '%s\\n' '${line}'\nexit 1`);
   const result = await f.harness.run(request(), policy);
   assert.equal(result.end.kind, "terminal");
   assert.equal(result.end.terminal.outcome, "failed");
   assert.equal(result.end.terminal.subtype, "authentication");
 });
 
-test("Gemini advice derives effort-suffixed defaults and only supplies effort for unsuffixed overrides", async t => {
+test("Gemini advice derives effort-suffixed defaults and accepts only verified Gemini model IDs", async t => {
   const f = fixture(t, captureScript(path.join(os.tmpdir(), "unused")));
   fs.writeFileSync(f.cli, `#!/bin/sh\n${captureScript(f.capture)}\n`, { mode: 0o700 });
   await f.harness.run(request({ effort: "low" }), policy);
   assert.match(fs.readFileSync(`${f.capture}.argv`, "utf8"), /--model=gemini-3\.8-flash-low/);
   assert.doesNotMatch(fs.readFileSync(`${f.capture}.argv`, "utf8"), /--effort/);
-  const overridden = new GeminiAdviceHarness({ geminiCredentialSource: { kind: "worker_host", home: f.home, cli: f.cli }, geminiHostReadiness: () => true }, { UZI_GEMINI_MODEL: "custom-model", PATH: process.env.PATH });
+  const overridden = new GeminiAdviceHarness({ geminiCredentialSource: { kind: "worker_host", home: f.home, cli: f.cli }, geminiHostReadiness: () => true }, { UZI_GEMINI_MODEL: "gemini-3.8-flash-medium", PATH: process.env.PATH });
   await overridden.run(request({ effort: "medium" }), policy);
   const argv = fs.readFileSync(`${f.capture}.argv`, "utf8");
-  assert.match(argv, /--model=custom-model/);
-  assert.match(argv, /--effort\nmedium/);
+  assert.match(argv, /--model=gemini-3\.8-flash-medium/);
+  assert.doesNotMatch(argv, /--effort/);
+  await assert.rejects(f.harness.run(request({ model: "gemini-3.8-flash" }), policy), (error: unknown) => error instanceof GeminiAdviceError && error.failure.category === "model");
+  const invalidEnv = new GeminiAdviceHarness({ geminiCredentialSource: { kind: "worker_host", home: f.home, cli: f.cli }, geminiHostReadiness: () => true }, { UZI_GEMINI_MODEL: "custom-model", PATH: process.env.PATH });
+  await assert.rejects(invalidEnv.run(request(), policy), (error: unknown) => error instanceof GeminiAdviceError && error.failure.category === "model");
 });
 
-test("Gemini advice fails closed on an error final event and ignores unrelated successful stderr", async t => {
+test("Gemini advice fails closed on an error final event and ignores auth-like successful stderr", async t => {
   const errored = fixture(t, "printf '%s\\n' '{\"type\":\"result\",\"is_error\":true,\"subtype\":\"provider_error\",\"result\":\"nope\"}'");
   const erroredResult = await errored.harness.run(request(), policy);
   assert.equal(erroredResult.end.kind, "terminal");
   assert.equal(erroredResult.end.terminal.outcome, "failed");
   assert.deepEqual(erroredResult.end.terminal.errors, ["provider_error"]);
-  const successful = fixture(t, "printf '%s\\n' 'historical context' >&2\nprintf '%s\\n' '{\"type\":\"result\",\"result\":\"ok\"}'");
+  const successful = fixture(t, "printf '%s\\n' 'not signed in: historical context' >&2\nprintf '%s\\n' '{\"type\":\"result\",\"result\":\"ok\"}'");
   const successfulResult = await successful.harness.run(request(), policy);
   assert.equal(successfulResult.end.kind, "terminal");
   assert.equal(successfulResult.end.terminal.outcome, "success");
+});
+
+test("Gemini advice recognizes frame-only auth and unsuccessful terminal result variants", async t => {
+  const frameAuth = fixture(t, "printf '%s\\n' '{\"event\":\"result\",\"result\":{\"status\":\"ERROR\",\"response\":\"\",\"error\":\"authentication failed\",\"finished_reason\":\"stop\"}}'");
+  const frameAuthResult = await frameAuth.harness.run(request(), policy);
+  assert.equal(frameAuthResult.end.kind, "terminal");
+  assert.equal(frameAuthResult.end.terminal.subtype, "authentication");
+  const statusOnly = fixture(t, "printf '%s\\n' '{\"event\":\"result\",\"result\":{\"status\":\"ERROR\",\"response\":\"nope\",\"error\":\"\",\"finished_reason\":\"stop\"}}'");
+  const statusOnlyResult = await statusOnly.harness.run(request(), policy);
+  assert.equal(statusOnlyResult.end.kind, "terminal");
+  assert.equal(statusOnlyResult.end.terminal.outcome, "failed");
+  assert.equal(statusOnlyResult.end.terminal.subtype, "protocol");
+  const reasonOnly = fixture(t, "printf '%s\\n' '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"nope\",\"error\":\"\",\"finished_reason\":\"error\"}}'");
+  const reasonOnlyResult = await reasonOnly.harness.run(request(), policy);
+  assert.equal(reasonOnlyResult.end.kind, "terminal");
+  assert.equal(reasonOnlyResult.end.terminal.outcome, "failed");
+  assert.deepEqual(reasonOnlyResult.end.terminal.errors, ["Gemini reported an error result"]);
 });
 
 test("Gemini advice throws when the CLI exits without a final event", async t => {

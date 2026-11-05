@@ -20,9 +20,8 @@ import type { AdviceHarness, AdviceRequest, AdviceResult, AdviceResultPolicy, Ha
 
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
-const MODEL = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const EFFORT_MODEL = /-(low|medium|high)$/;
-const AUTH_DIAGNOSTIC = /authentication required|authentication failed|not signed in|log in/i;
+const GEMINI_MODEL = /^gemini-[0-9.]+-[a-z]+-(low|medium|high)$/;
+const AUTH_DIAGNOSTIC = /\bauthentication required\b|\bauthentication failed\b|\bnot signed in\b|\blog in\b/i;
 
 export class GeminiAdviceError extends Error {
   readonly failure: HarnessError;
@@ -37,7 +36,7 @@ type GeminiConfig = Pick<Config, "geminiCredentialSource" | "geminiHostReadiness
 
 function modelFromEnv(env: NodeJS.ProcessEnv, requestEffort: AdviceRequest["effort"]): string {
   const model = env.UZI_GEMINI_MODEL === undefined ? `gemini-3.8-flash-${effort(requestEffort)}` : env.UZI_GEMINI_MODEL;
-  if (!MODEL.test(model)) throw new GeminiAdviceError("model", "UZI_GEMINI_MODEL must be a non-empty model identifier");
+  if (!GEMINI_MODEL.test(model)) throw new GeminiAdviceError("model", "UZI_GEMINI_MODEL must match gemini-<version>-<family>-<low|medium|high>");
   return model;
 }
 
@@ -84,13 +83,20 @@ function finalUsage(value: Record<string, unknown>): HarnessUsage | undefined {
   const number = (key: string): number | undefined => typeof usage[key] === "number" && Number.isFinite(usage[key]) && usage[key] >= 0 ? usage[key] : undefined;
   const input = number("input_tokens"); const output = number("output_tokens"); const cacheRead = number("cache_read_tokens");
   if (input === undefined && output === undefined && cacheRead === undefined) return undefined;
-  return { basis: "call", tokens: { ...(input === undefined ? {} : { inputTotalTokens: input }), ...(output === undefined ? {} : { outputTokens: output }), ...(cacheRead === undefined ? {} : { inputCacheReadTokens: cacheRead }) }, wire: { usage } };
+  // agy's token semantics are unverified. The fixture's total is input + cache
+  // read + output, so input_tokens best matches this contract's uncached bucket.
+  // Keep thinking_tokens in wire usage rather than normalizing it: we have not
+  // established that it is a subset of output_tokens, as required by the neutral
+  // reasoningOutputTokens field.
+  return { basis: "call", tokens: { ...(input === undefined ? {} : { inputUncachedTokens: input }), ...(output === undefined ? {} : { outputTokens: output }), ...(cacheRead === undefined ? {} : { inputCacheReadTokens: cacheRead }) }, wire: { usage } };
 }
 
 function finalStatusFailure(value: Record<string, unknown>): boolean {
   const result = record(value.result);
   if (!result) return false;
   const status = typeof result.status === "string" ? result.status.toLowerCase() : "";
+  // Signed-in agy success spelling is unverified. This deliberately fails closed
+  // until a successful trace confirms whether success/ok is the complete set.
   return status.length > 0 && status !== "success" && status !== "ok";
 }
 
@@ -104,15 +110,14 @@ export class GeminiAdviceHarness implements AdviceHarness {
   constructor(private readonly config: GeminiConfig, private readonly env: NodeJS.ProcessEnv = process.env) {}
 
   async run(request: AdviceRequest, policy: AdviceResultPolicy): Promise<AdviceResult> {
-    // agy exposes no measured advice flags for maxOutputTokens or thinking, and
-    // emits no usage frames. Those optional neutral-contract fields therefore
-    // remain deliberately unsupported rather than being misrepresented.
+    // agy exposes no measured advice flags for maxOutputTokens or thinking. Its
+    // terminal usage frame is retained verbatim and only conservatively normalized.
     const source = this.config.geminiCredentialSource;
     if (source?.kind !== "worker_host" || !this.config.geminiHostReadiness?.()) {
       throw new GeminiAdviceError("authentication", "Gemini host login source is not ready");
     }
     const model = request.model ?? modelFromEnv(this.env, request.effort);
-    if (!MODEL.test(model)) throw new GeminiAdviceError("model", "Gemini model must be a non-empty model identifier");
+    if (!GEMINI_MODEL.test(model)) throw new GeminiAdviceError("model", "Gemini model must match gemini-<version>-<family>-<low|medium|high>");
     // agy's native JSON-schema enforcement has not been measured for this isolated
     // advice lane. Refuse rather than pretending an object parse enforces the schema.
     if (request.output.kind !== "text") {
@@ -120,7 +125,7 @@ export class GeminiAdviceHarness implements AdviceHarness {
     }
     const cwd = await mkdtemp(join(tmpdir(), "uzi-gemini-advice-"));
     try {
-      const args = ["--print=", "--input-format", "stream-json", "--output-format", "stream-json", `--model=${model}`, ...(EFFORT_MODEL.test(model) ? [] : ["--effort", effort(request.effort)]), "--sandbox", "--disable-slash-commands"];
+      const args = ["--print=", "--input-format", "stream-json", "--output-format", "stream-json", `--model=${model}`, "--sandbox", "--disable-slash-commands"];
       // This replacement env is intentionally a closed allowlist. Do not spread process.env.
       const childEnv: NodeJS.ProcessEnv = { HOME: source.home };
       for (const name of ["PATH", "LANG", "TZ", "TMPDIR"] as const) if (this.env[name] !== undefined) childEnv[name] = this.env[name];
@@ -241,7 +246,7 @@ export class GeminiAdviceHarness implements AdviceHarness {
           try { accept(stdout); } catch { return finish(new GeminiAdviceError("protocol", "Gemini emitted invalid stream-json")); }
         }
         if (pendingError) return finish(pendingError);
-        const auth = finalWasAuthError || AUTH_DIAGNOSTIC.test(`${stderr}\n${diagnostic}`);
+        const auth = finalWasAuthError || ((!final || code !== 0) && AUTH_DIAGNOSTIC.test(`${stderr}\n${diagnostic}`));
         if (auth) return finish({ text: finalResult ?? deltas.join(""), end: { kind: "terminal", terminal: terminal("failed", "authentication", ["Gemini host login needs re-login"], usage) }, usage });
         if (!final) return finish(new GeminiAdviceError("protocol", `Gemini CLI ended without a final result (exit ${code ?? "signal"})`));
         const text = finalResult ?? deltas.join("");
