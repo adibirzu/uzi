@@ -81,7 +81,7 @@ These are planned, not shipped:
 
 | Request | Planned outcome | Boundary |
 |---|---|---|
-| Keep uzi's own harness available | Native workflow remains the default; explicit owner selection for the harness integration | Workflow selection is distinct from Claude/Codex model selection; full external execution versus policy/tool integration needs owner clarification |
+| Keep uzi's own harness available | Native workflow remains the default; explicit per-repo/run owner selection of the full existing harness workflow (owner-decided 2026-11-05) | Workflow selection is distinct from Claude/Codex model selection; not reduced to policy/tool overlays; phased delivery with qualification gates |
 | Integrate the existing harness | Reuse harness-library contract v1, pinned overlays, exact-head checks and metadata-only outcomes | Do not embed project-specific stream/suite scripts or weaken their gates |
 | AXI plugin approach | Explicit, versioned tool selection with compact scoped discovery and contextual commands | No native repo hook discovery, automatic installs or host credential exposure |
 | no-mistakes approach | Exact-head evidence, independent review, deterministic gates and owner decisions | Reuse uzi's workflow first; an actual daemon connector needs single-writer custody and must stay outside untrusted worker execution |

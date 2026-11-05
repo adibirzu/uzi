@@ -12,11 +12,10 @@ their current credential and execution contracts. An AXI tool profile and a
 verification profile are independently visible; selecting a workflow must not
 silently install tools, choose an account, spend an API key or grant permissions.
 
-One interpretation still needs owner confirmation before the selector is
-implemented: whether "my harness" means the full external Firstmate/stream
-workflow, or the existing harness-library policies/tools applied within uzi's
-workflow. These have different lifecycle ownership. This PRD records both and
-must not implement a cosmetic selector before that decision is settled.
+Owner decision (2026-11-05): the selector is per repo/run and chooses between
+uzi native and the owner's full existing harness workflow, meaning its existing
+orchestration, policies and verification tools. It must not be reduced to
+policy/tool overlays. Native remains the default.
 
 ## Audit: what already exists
 
@@ -52,11 +51,12 @@ Choose and record one first delivery, while preserving the native default:
 1. **Policy/tool integration:** uzi owns execution; harness-library supplies pinned, owner-approved policies and checks. Firstmate may dispatch uzi through an adapter.
 2. **External workflow integration:** a host-side Firstmate/stream adapter owns execution, with explicit dispatch, cancellation, recovery and publication receipts. It cannot be launched as an arbitrary shell command inside the existing worker and called another model harness.
 
-The smaller first delivery is policy/tool integration. A full external workflow
-needs evidence for cancellation, resume, exact-head publication, isolated
-credentials and a single writer; missing enforcement leaves it unavailable.
-Record the owner's decision before implementing the selector. No new service
-or privilege is justified merely to make the option appear enabled.
+Delivery is phased: policy/tool integration may land first as a step toward the
+decided full-harness option, not as a replacement for it. The full external
+workflow needs evidence for cancellation, resume, exact-head publication,
+isolated credentials and a single writer; missing enforcement leaves the option
+unavailable. No new service or privilege is justified merely to make the option
+appear enabled.
 
 Validation: trace the selected mode end to end using a fake adapter, including
 missing adapter, unavailable worker capability, cancellation and stale receipts.
@@ -137,7 +137,7 @@ needed, is separate from worker-bound implementation.
 
 - 2026-11-05: owner requested native-harness choice, existing harness integration, AXI plugin approach and no-mistakes approach; both credential review repairs were separately authorized and remain on the credential feature branch.
 - 2026-11-05: source audit separates policy library, supervisor, model launcher and verifier. No third model HarnessKind, wholesale script import, automatic host plugin loading or nested no-mistakes execution is justified by that audit.
-- 2026-11-05: exact meaning of the selector is pending the owner's clarification; policy/tool integration is the proposed smallest delivery, not an accepted narrowing of external workflow support.
+- 2026-11-05: RESOLVED by owner: the selector is per repo/run, native (default) versus the full existing harness workflow (orchestration, policies, verification tools); not narrowed to overlays. Phased implementation and qualification obligations and all audit/safety requirements are retained. Scope: documentation-only proposal validated by the docs checker plus static prose review; planned features are not live-tested or claimed shipped, and no runtime selector is implemented here.
 
 ## Upstream coordination
 
