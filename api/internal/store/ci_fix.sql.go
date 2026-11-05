@@ -647,7 +647,7 @@ WITH matching AS (
     WHERE repo_id = $1::uuid
       AND (branch = $2 OR (
           kind = 'issue' AND branch IS NULL
-          AND (status NOT IN ('completed', 'failed', 'cancelled') OR started_at IS NOT NULL)
+          AND status NOT IN ('completed', 'failed', 'cancelled')
           AND 'agent/issue-' || issue_iid::text = $2
       ))
 )

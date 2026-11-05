@@ -142,3 +142,64 @@ func TestCIFixHostPublicationRaceLiveDB(t *testing.T) {
 		}
 	}
 }
+
+func TestCIFixUnpublishedStartedReplacementLiveDB(t *testing.T) {
+	for _, automatic := range []bool{false, true} {
+		for _, host := range []bool{false, true} {
+			for _, terminal := range []string{"cancelled", "failed"} {
+				for _, stage := range []string{"preflight", "transaction"} {
+					t.Run(fmt.Sprintf("auto=%t/host=%t/%s/%s", automatic, host, terminal, stage), func(t *testing.T) {
+						env, _, user, repo := branchSerializeEnv(t)
+						const iid int64 = 39531
+						ref := agentIssueBranch(iid)
+						seed := func() {
+							published, replacement := uuid.New(), uuid.New()
+							env.exec(`INSERT INTO runs (id,user_id,repo_id,kind,issue_iid,issue_title,issue_description,status,branch,harness,created_at)
+        VALUES ($1,$2,$3,'issue',$4,'published','d','completed',$5,'claude',now()-interval '1 hour'),
+        ($6,$2,$3,'issue',$4,'unpublished','d',$7,NULL,'claude',now())`, published, user, repo, iid, ref, replacement, terminal)
+							env.exec(`UPDATE runs SET started_at=now()-interval '5 minutes' WHERE id=$1`, replacement)
+							bound := published
+							if !host {
+								bound = replacement
+							}
+							env.exec(`UPDATE runs SET harness='codex',codex_credential_source_kind='worker_host',codex_credential_source_id=$2,
+        codex_credential_source_revision=1,codex_credential_source_worker_id=$3 WHERE id=$1`, bound, uuid.NewString(), uuid.New())
+						}
+						if stage == "preflight" {
+							seed()
+						}
+						seeded := stage == "preflight"
+						after := func(args []any) {
+							if seeded || len(args) != 2 || args[0] != repo {
+								return
+							}
+							branch, ok := args[1].(pgtype.Text)
+							if !ok || branch.String != ref {
+								return
+							}
+							seeded = true
+							seed()
+						}
+						svc := New(store.New(ciPublicationDB{DBTX: env.pool, after: after}), env.box, Params{})
+						svc.SetTxBeginner(ciPublicationBeginner{TxBeginner: env.pool, after: after})
+						create := svc.CreateCIFixRun
+						if automatic {
+							create = svc.CreateAutoCIFixRun
+						}
+						_, err := create(env.ctx, user, repo, ref, "Fix CI", "d", ciFixSnapshot(ref, 395310), nil)
+						if host {
+							if !errors.Is(err, ErrHostCodexDerivedRunUnsupported) {
+								t.Fatalf("published host superseded by unpublished replacement: %v", err)
+							}
+						} else if err != nil {
+							t.Fatalf("published server superseded by unpublished host: %v", err)
+						}
+						if !seeded {
+							t.Fatal("publication boundary was not reached")
+						}
+					})
+				}
+			}
+		}
+	}
+}
