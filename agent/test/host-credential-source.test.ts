@@ -185,6 +185,7 @@ test("Grok host credential configuration is host-only, advice-only, and budgeted
   assert.equal(loadConfig(base).grokCredentialSource, undefined);
   assert.equal(loadConfig({ ...base, UZI_GROK_CREDENTIAL_SOURCE: "" }).grokCredentialSource, undefined);
   assert.deepEqual(loadConfig(base).grokRoles, ["reviewer", "cross_check"]);
+  assert.deepEqual(loadConfig({ ...base, UZI_GROK_ROLES: "" }).grokRoles, ["reviewer", "cross_check"]);
   assert.equal(loadConfig(base).grokDailyCallBudget, 20);
   const complete = {
     ...base, UZI_GROK_CREDENTIAL_SOURCE: "  WORKER_HOST  ",
@@ -203,7 +204,8 @@ test("Grok host credential configuration is host-only, advice-only, and budgeted
   for (const [value, expected] of [["0", 0], ["20", 20], ["200", 200]] as const) {
     assert.equal(loadConfig({ ...complete, UZI_GROK_DAILY_CALL_BUDGET: value }).grokDailyCallBudget, expected);
   }
-  for (const budget of ["", "-1", "+1", "1.5", "201", "1e2", "nope"]) {
+  assert.equal(loadConfig({ ...complete, UZI_GROK_DAILY_CALL_BUDGET: "" }).grokDailyCallBudget, 20);
+  for (const budget of ["-1", "+1", "1.5", "201", "1e2", "nope"]) {
     assert.throws(() => loadConfig({ ...complete, UZI_GROK_DAILY_CALL_BUDGET: budget }), /invalid UZI_GROK_DAILY_CALL_BUDGET/);
   }
 });

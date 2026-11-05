@@ -35,6 +35,11 @@ test("Grok host source rejects symlink homes, wrong modes, missing or unsafe CLI
   assert.equal(source.ready(), false);
   fs.unlinkSync(f.home);
   fs.mkdirSync(f.home, { mode: 0o700 });
+  fs.rmSync(f.home, { recursive: true });
+  fs.writeFileSync(f.home, "not a directory", { mode: 0o600 });
+  assert.equal(source.ready(), false, "regular-file home is rejected");
+  fs.unlinkSync(f.home);
+  fs.mkdirSync(f.home, { mode: 0o700 });
   fs.rmSync(f.cli);
   assert.equal(source.ready(), false);
   fs.writeFileSync(f.cli, "#!/bin/sh\n", { mode: 0o600 });
@@ -43,6 +48,8 @@ test("Grok host source rejects symlink homes, wrong modes, missing or unsafe CLI
   assert.equal(source.ready(), false, "group/world-writable CLI is rejected");
   fs.chmodSync(f.cli, 0o720);
   assert.equal(source.ready(), false, "group-writable CLI is rejected");
+  fs.chmodSync(f.cli, 0o702);
+  assert.equal(source.ready(), false, "world-writable CLI is rejected");
   fs.chmodSync(f.cli, 0o700);
   fs.unlinkSync(f.cli);
   fs.symlinkSync("/bin/sh", f.cli);
@@ -52,7 +59,7 @@ test("Grok host source rejects symlink homes, wrong modes, missing or unsafe CLI
   assert.equal(source.ready(), false);
 });
 
-test("Grok host source rejects a home owned by another user", t => {
+test("Grok host source rejects foreign-owned homes and CLIs", t => {
   const f = fixture(t);
   const realGetuid = process.getuid;
   assert.ok(realGetuid, "Node worker platforms provide getuid");
@@ -62,6 +69,28 @@ test("Grok host source rejects a home owned by another user", t => {
   assert.equal(openHostGrokSource(f.home, rootCli).ready(), true, "control: root-owned CLI passes");
   t.mock.method(process as typeof process & { getuid: () => number }, "getuid", () => realGetuid() + 1);
   assert.equal(openHostGrokSource(f.home, rootCli).ready(), false);
+});
+
+test("Grok host source rejects a CLI owned by another non-root user", t => {
+  const f = fixture(t);
+  const realGetuid = process.getuid;
+  assert.ok(realGetuid, "Node worker platforms provide getuid");
+  let calls = 0;
+  t.mock.method(process as typeof process & { getuid: () => number }, "getuid", () => {
+    calls += 1;
+    return calls === 1 ? realGetuid() : realGetuid() + 1;
+  });
+  assert.equal(openHostGrokSource(f.home, f.cli).ready(), false, "non-root foreign-owned CLI is rejected");
+});
+
+test("Grok host source requires executable access in addition to executable mode", t => {
+  const f = fixture(t);
+  t.mock.method(fs, "accessSync", ((target: fs.PathLike) => {
+    if (target === f.cli) throw new Error("access denied");
+  }) as typeof fs.accessSync);
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  assert.equal(openHostGrokSource(f.home, f.cli).ready(), false);
 });
 
 test("grok host source never reads files inside the host home", t => {

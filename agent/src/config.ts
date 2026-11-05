@@ -588,7 +588,7 @@ function parseGrokCredentialSource(env: NodeJS.ProcessEnv): GrokCredentialSource
 }
 
 function parseGrokRoles(value: string | undefined): GrokRole[] {
-  const raw = value === undefined ? "reviewer,cross_check" : value;
+  const raw = value?.trim() || "reviewer,cross_check";
   const roles = raw.split(",").map(role => role.trim());
   if (roles.some(role => role !== "reviewer" && role !== "cross_check") || new Set(roles).size !== roles.length) {
     throw new Error("invalid UZI_GROK_ROLES (expected a unique comma-separated subset of reviewer,cross_check)");
@@ -597,7 +597,7 @@ function parseGrokRoles(value: string | undefined): GrokRole[] {
 }
 
 function parseGrokDailyCallBudget(value: string | undefined): number {
-  const raw = value?.trim() ?? "20";
+  const raw = value?.trim() || "20";
   if (!/^(?:0|[1-9][0-9]*)$/.test(raw)) {
     throw new Error("invalid UZI_GROK_DAILY_CALL_BUDGET (expected an integer in the range 0..200)");
   }

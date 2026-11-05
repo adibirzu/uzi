@@ -114,15 +114,15 @@ integer range 0..200, and 0 disables calls. These are configuration contracts;
 their runtime enforcement belongs to the later harness issue, which is also the
 first issue allowed to execute a Grok turn.
 
-Verified facts for the real 1.0.70 CLI define that later harness boundary, not
-this foundation's test coverage: login is scoped by `GROK_HOME` and `HOME/.grok`.
-A fresh `GROK_HOME` reports `You are not authenticated.` and creates config files
-there; an operator uses `GROK_HOME="<UZI_GROK_HOST_HOME>" grok login --device-code`.
-Headless use is `grok -p <prompt> --output-format json|streaming-json`; without
-authentication it emits an error object with `Not signed in` in its message. Its
-default model is `grok-4.6`, and its relevant flags are `--no-plan`,
-`--permission-mode`, `--sandbox <PROFILE>`, `--tools`, `--disable-web-search`,
-`--max-turns`, and `--prompt-file`. A future child receives
-`GROK_HOME=<UZI_GROK_HOST_HOME>` after scrubbing `XAI_API_KEY`, every
-`GROK_AUTH*`, and every `GROK_AUTH_PROVIDER_*` variable. No Grok execution was
-tested here.
+Verified Grok 1.0.70 CLI evidence defines that later harness boundary, not this
+foundation's test coverage. With a fresh empty `HOME` and no `GROK_HOME`, Grok
+created `HOME/.grok`; `grok -p` reported a message that contains `Not signed in`,
+and `grok models` printed `Default model: grok-4.6`. With a fresh `GROK_HOME` and
+normal `HOME`, `grok models` printed exactly `You are not authenticated.` and
+created `config.toml`, `agent_id`, and `README.md` there. `grok login --help`
+listed `--device-auth` (alias `--device-code`) and `--oauth`. An unauthenticated
+`grok -p <prompt> --output-format json` wrote
+`{"type":"error","message":"Not signed in. To authenticate without a browser, run:\n  grok login --device-code\n..."}`;
+its `message` contains `Not signed in`. A future child receives
+`GROK_HOME=<UZI_GROK_HOST_HOME>` after scrubbing `XAI_API_KEY` and `GROK_AUTH*`
+variables. No Grok execution was tested here.

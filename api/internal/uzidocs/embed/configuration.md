@@ -550,8 +550,8 @@ Set on the `agent` compose service (profile `agent`) or on a standalone `docker 
 | `UZI_GROK_CREDENTIAL_SOURCE` | disabled | Grok host-login custody mode. Empty/unset disables Grok; only `worker_host` is accepted (there is no server-held Grok credential, API-key path, or fallback). |
 | `UZI_GROK_HOST_HOME` | — (required for `worker_host`) | Absolute path to the dedicated Grok login directory. It must be a real, worker-owned `0700` directory; the worker only validates its metadata and never reads files inside it. |
 | `UZI_GROK_CLI` | — (required for `worker_host`) | Absolute path to the Grok CLI. It must be an owner- or root-owned, non-group/world-writable regular executable file before the worker advertises `grok_host_login_v1`; point it at the resolved executable target, not a symlink. |
-| `UZI_GROK_ROLES` | `reviewer,cross_check` | Comma-separated unique subset of `reviewer,cross_check`; `author` is always rejected. This is parsed now and will be enforced by the later Grok harness. |
-| `UZI_GROK_DAILY_CALL_BUDGET` | `20` | Strict integer from `0` through `200`; `0` disables Grok calls. This is parsed now and will be enforced by the later Grok harness. |
+| `UZI_GROK_ROLES` | `reviewer,cross_check` | Comma-separated unique subset of `reviewer,cross_check`; blank/unset uses the default and `author` is always rejected. This is parsed now and will be enforced by the later Grok harness. |
+| `UZI_GROK_DAILY_CALL_BUDGET` | `20` | Strict integer from `0` through `200`; blank/unset uses the default and `0` disables Grok calls. This is parsed now and will be enforced by the later Grok harness. |
 | `UZI_STUB_PLAN_GATE` | `false` | Only meaningful with `UZI_EXECUTOR=stub`: makes the stub drive the M4 plan-approval gate before committing, instead of committing immediately. Test/harness use only. |
 | `WORKER_HEARTBEAT_INTERVAL` | `15s` | How often the worker posts a heartbeat. |
 | `WORKER_POLL_INTERVAL` | `3s` | How often an idle worker asks the server for a run to claim. |
@@ -583,18 +583,17 @@ at worker startup or the worker refuses to start. Registration advertises only
 opaque `grok_host_login_v1` metadata; the later harness must revalidate the
 boundary immediately before use.
 
-The verified Grok 1.0.70 CLI contract for that later harness is: login is scoped
-by both `GROK_HOME` and `HOME/.grok` (a fresh `GROK_HOME` reports `You are not
-authenticated.` and creates configuration there). An operator logs in with
-`GROK_HOME="<UZI_GROK_HOST_HOME>" grok login --device-code`. Headless calls use
-`grok -p <prompt> --output-format json` or `streaming-json`; an unauthenticated
-call emits an error object whose message starts `Not signed in`. The default
-model is `grok-4.6`; supported control flags include `--no-plan`,
-`--permission-mode`, `--sandbox <PROFILE>`, `--tools`, `--disable-web-search`,
-`--max-turns`, and `--prompt-file`. The child must receive
-`GROK_HOME=<UZI_GROK_HOST_HOME>` and scrub `XAI_API_KEY`, every `GROK_AUTH*`, and
-every `GROK_AUTH_PROVIDER_*` variable. These facts document the future harness
-contract only; turn execution was not tested in this foundation.
+The verified Grok 1.0.70 CLI evidence for that later harness is: with a fresh
+`HOME` and no `GROK_HOME`, `grok` created `HOME/.grok` and `grok -p` reported a
+message that contains `Not signed in`; `grok models` printed `Default model:
+grok-4.6`. With a fresh `GROK_HOME` and normal `HOME`, `grok models` printed
+exactly `You are not authenticated.` and created `config.toml`, `agent_id`, and
+`README.md` in `GROK_HOME`. `grok login --help` listed `--device-auth` (alias
+`--device-code`) and `--oauth`. An unauthenticated `grok -p <prompt>
+--output-format json` wrote an error object whose `message` contains `Not signed
+in`. The child must receive `GROK_HOME=<UZI_GROK_HOST_HOME>` and scrub
+`XAI_API_KEY` and `GROK_AUTH*` variables. These facts document the future
+harness contract only; turn execution was not tested in this foundation.
 
 ### Worker Go concurrency defaults
 
