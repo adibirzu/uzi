@@ -265,6 +265,17 @@ func inheritHostCodexSource(ctx context.Context, run store.Run) (context.Context
 	}), nil
 }
 
+// inheritedHostCodexHarness returns Codex when this derived create carries a worker-host
+// source inherited from its parent. Worker-host login custody is Codex-only, so the atomic
+// create seam must never receive a stale non-Codex parent harness as its explicit selection.
+func inheritedHostCodexHarness(ctx context.Context, fallback Harness) Harness {
+	source, requested := hostCodexSourceFromContext(ctx)
+	if requested && source.Inherited {
+		return HarnessCodex
+	}
+	return fallback
+}
+
 // harnessResolverStore is the narrow C1-frozen read surface the store-backed resolver
 // consumes. *store.Queries satisfies it; the production Service's s.q is a *store.Queries
 // underneath, reached via harnessStore() below. Keeping it a local narrow interface

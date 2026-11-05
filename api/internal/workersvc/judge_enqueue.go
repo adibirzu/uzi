@@ -289,6 +289,7 @@ func (s *Service) maybeEnqueueJudge(ctx context.Context, run store.Run) {
 		slog.Warn("judge enqueue: worker-host source unavailable, skipping judge", "run", run.ID, "reason", "host_codex_source_unavailable", "error", inheritErr)
 		return
 	}
+	judgeHarness = inheritedHostCodexHarness(ctx, judgeHarness)
 	judge, err := s.createRunResolved(ctx, run.UserID, &judgeHarness, func(q Store, resolved resolvedHarness) (store.Run, error) {
 		return q.CreateJudgeRun(ctx, store.CreateJudgeRunParams{
 			UserID:           run.UserID,

@@ -183,7 +183,7 @@ func TestOnDemandReworkRowTurnedLegacyDuringCreateIs409LiveDB(t *testing.T) {
 func TestOnDemandReworkHostCodexSourceUnavailableLiveDB(t *testing.T) {
 	rig := newReworkRig(t, &settingsStore{}, time.Minute)
 	cliMustExec(t, rig.pool, `UPDATE runs
-		SET codex_credential_source_kind = 'worker_host', codex_credential_source_id = $2,
+		SET harness = 'codex', codex_credential_source_kind = 'worker_host', codex_credential_source_id = $2,
 		    codex_credential_source_revision = 1, codex_credential_source_worker_id = $3
 		WHERE id = $1`, rig.runID, uuid.NewString(), uuid.New())
 
@@ -211,7 +211,7 @@ func TestOnDemandReworkHostCodexSourceInheritedLiveDB(t *testing.T) {
 		 ARRAY['codex_host_login_v1','codex_harness_v1','codex_runtime_v2'], $5, $6, true)`,
 		workerID, rig.user.ID, "host-source-"+workerID.String(), workerID[:], sourceID, revision)
 	cliMustExec(t, rig.pool, `UPDATE runs
-		SET codex_credential_source_kind = 'worker_host', codex_credential_source_id = $2,
+		SET harness = 'codex', codex_credential_source_kind = 'worker_host', codex_credential_source_id = $2,
 		    codex_credential_source_revision = $3, codex_credential_source_worker_id = $4
 		WHERE id = $1`, rig.runID, sourceID, revision, workerID)
 

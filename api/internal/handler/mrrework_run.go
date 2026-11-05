@@ -254,14 +254,10 @@ func (h *Handler) StartRunRework(w http.ResponseWriter, r *http.Request) {
 			httpx.Error(w, http.StatusConflict, "a rework is already running for this merge request")
 		case errors.Is(err, workersvc.ErrCodexPoolUnavailable):
 			httpx.JSON(w, http.StatusUnprocessableEntity, codexPoolUnavailableBody())
-		case errors.Is(err, workersvc.ErrNoCredentialForHarness):
+		case writeMRReworkCredentialError(w, err):
 			// PRD #1429 M2 (D4): the derived rework INHERITS the source run's harness explicitly; if
 			// that harness is no longer usable, creation refuses with no fallback. Surface the typed
 			// reason (422, stable no_credential_for_harness classification) rather than a 500.
-			httpx.JSON(w, http.StatusUnprocessableEntity, map[string]any{
-				"error": "the source run's harness has no usable credential",
-				"code":  "no_credential_for_harness",
-			})
 		default:
 			slog.Error("start run rework", "run_id", runID, "error", err)
 			httpx.Error(w, http.StatusInternalServerError, "internal error")
@@ -269,4 +265,18 @@ func (h *Handler) StartRunRework(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusCreated, h.createdRunBody(r.Context(), runToDTO(run, h.runPriorityClass(r.Context(), run), h.cfg.RunTimeout, h.runExtensionCapSeconds(r.Context()), h.cfg.RunForgeUnreachableMaxParks, h.clock(), h.cfg.RunMaxRequeues)))
+}
+
+// writeMRReworkCredentialError maps either harness-resolution refusal to the stable rework
+// credential response. ErrNoUsableCredential is a defensive fallback for a malformed legacy
+// parent whose host binding and persisted harness disagree.
+func writeMRReworkCredentialError(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, workersvc.ErrNoCredentialForHarness) && !errors.Is(err, workersvc.ErrNoUsableCredential) {
+		return false
+	}
+	httpx.JSON(w, http.StatusUnprocessableEntity, map[string]any{
+		"error": "the source run's harness has no usable credential",
+		"code":  "no_credential_for_harness",
+	})
+	return true
 }

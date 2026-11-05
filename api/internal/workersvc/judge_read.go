@@ -260,6 +260,7 @@ func (s *Service) RerunJudge(ctx context.Context, userID uuid.UUID, isAdmin bool
 	if err != nil {
 		return store.Run{}, err
 	}
+	targetHarness = inheritedHostCodexHarness(ctx, targetHarness)
 	judge, err := s.createRunResolved(ctx, target.UserID, &targetHarness, func(q Store, resolved resolvedHarness) (store.Run, error) {
 		return q.CreateJudgeRun(ctx, store.CreateJudgeRunParams{
 			UserID:           target.UserID,
