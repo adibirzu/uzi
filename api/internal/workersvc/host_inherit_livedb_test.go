@@ -30,7 +30,7 @@ func newHostInheritanceFixture(t *testing.T) hostInheritanceFixture {
 func (f hostInheritanceFixture) parent(t *testing.T, kind, branch string) uuid.UUID {
 	t.Helper()
 	id := f.env.seedCodexRun(t, f.userID, f.workerID, f.repoID)
-	f.env.exec(`UPDATE runs SET kind=$2, status='completed', harness='codex', branch=$3,
+	f.env.exec(`UPDATE runs SET kind=$2, issue_iid=CASE WHEN $2='task' THEN NULL ELSE issue_iid END, status='completed', harness='codex', branch=$3,
  codex_credential_source_kind='worker_host', codex_credential_source_id=$4,
  codex_credential_source_revision=7, codex_credential_source_worker_id=$5 WHERE id=$1`, id, kind, branch, f.source, f.workerID)
 	return id
@@ -202,6 +202,9 @@ func TestHostInheritIncompleteAndCIFixOwnershipLiveDB(t *testing.T) {
 	})
 	t.Run("ci_fix_ignores_other_user_host_parent", func(t *testing.T) {
 		f := newHostInheritanceFixture(t)
+		seedAnthropicToken(t, f.env, f.userID)
+		alias := f.env.seedStaticAPIKey(t, f.userID, "server", codexToken("sk"))
+		makeCodexDefault(t, f.env, alias)
 		ref := "fix/" + uuid.NewString()
 		otherUser := f.env.seedUser(t)
 		otherWorker := uuid.New()
@@ -220,6 +223,9 @@ func TestHostInheritIncompleteAndCIFixOwnershipLiveDB(t *testing.T) {
 		}
 		if r.CodexCredentialSourceKind.Valid && r.CodexCredentialSourceKind.String == "worker_host" {
 			t.Fatalf("other user's host parent bound child: %+v", r.CodexCredentialSourceKind)
+		}
+		if r.CodexCredentialSourceWorkerID.Valid {
+			t.Fatalf("child worker-host binding=%s, want none", uuid.UUID(r.CodexCredentialSourceWorkerID.Bytes))
 		}
 	})
 }
