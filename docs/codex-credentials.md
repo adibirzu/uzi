@@ -203,6 +203,12 @@ stale, or offline, the run remains queued: it creates no peer or ephemeral
 provisioning demand, no peer or ephemeral worker can claim it, and it never
 falls back to an imported server credential or API key.
 
+MR-rework, CI-fix, judge, task-review and then-fix runs derived from a
+host-bound run inherit its exact worker, source id and revision when they are
+created. If that binding is incomplete or unavailable they are refused, never
+moved to a server credential. Plan and code cross-check runs stay refused for
+the same custody reason; see [ADR-3751](../adr/3751-host-held-codex-login.md).
+
 This is experimental. Use this dedicated login from exactly one worker, and do
 not run an interactive CLI against its home while uzi owns it. The worker
 refreshes the login locally and fails closed on an invalid source or unsafe
