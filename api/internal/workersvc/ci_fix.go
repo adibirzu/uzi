@@ -235,7 +235,7 @@ func (s *Service) createCIFixRun(ctx context.Context, userID, repoID uuid.UUID, 
 		if (expectedParent == nil && e == nil) || (expectedParent != nil && (e != nil || fresh.ID != *expectedParent)) {
 			return store.Run{}, ErrCIFixBranchParentChanged
 		}
-		if e == nil && !(fresh.CodexCredentialSourceKind.Valid && fresh.CodexCredentialSourceKind.String == "worker_host") {
+		if e == nil && (!fresh.CodexCredentialSourceKind.Valid || fresh.CodexCredentialSourceKind.String != "worker_host") {
 			hostBound, e := q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{RepoID: repoID, UserID: userID, Branch: pgtype.Text{String: ref, Valid: true}})
 			if e != nil {
 				return store.Run{}, e
