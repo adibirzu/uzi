@@ -188,7 +188,7 @@ func TestRerunJudgeConflictMessages(t *testing.T) {
 	})
 }
 
-func TestRerunJudgeHostCodexDerivedRunUnsupported(t *testing.T) {
+func TestRerunJudgeHostCodexSourceUnavailable(t *testing.T) {
 	ds, runID, _ := oneRecStore()
 	ds.run.Harness = string(workersvc.HarnessClaude)
 	ds.run.CodexCredentialSourceKind = pgtype.Text{String: "worker_host", Valid: true}
@@ -205,8 +205,8 @@ func TestRerunJudgeHostCodexDerivedRunUnsupported(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["reason"] != "host_codex_derived_run_unsupported" {
-		t.Fatalf("reason = %v, want host_codex_derived_run_unsupported", body["reason"])
+	if body["reason"] != "host_codex_source_unavailable" {
+		t.Fatalf("reason = %v, want host_codex_source_unavailable", body["reason"])
 	}
 	if st.created != 0 {
 		t.Fatalf("CreateJudgeRun ran %d times despite host-derived target", st.created)

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	mw "github.com/vtmocanu/uzi/api/internal/middleware"
 	"github.com/vtmocanu/uzi/api/internal/settings"
 	"github.com/vtmocanu/uzi/api/internal/store"
+	"github.com/vtmocanu/uzi/api/internal/workersvc"
 )
 
 // erroringSettingsStore is a settings.Store whose ListAppSettings always fails, so the
@@ -24,6 +26,23 @@ type erroringSettingsStore struct{}
 
 func (erroringSettingsStore) ListAppSettings(context.Context) ([]store.AppSetting, error) {
 	return nil, errors.New("app_settings unavailable")
+}
+
+func TestWriteMRReworkCredentialErrorMapsNoUsableCredential(t *testing.T) {
+	rec := httptest.NewRecorder()
+	if !writeMRReworkCredentialError(rec, workersvc.ErrNoUsableCredential) {
+		t.Fatal("ErrNoUsableCredential was not handled")
+	}
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["code"] != "no_credential_for_harness" {
+		t.Fatalf("body = %v, want no_credential_for_harness", body)
+	}
 }
 
 // reworkReq builds a POST /api/runs/{id}/rework request authed as user with the chi {id}

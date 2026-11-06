@@ -20,11 +20,14 @@ import (
 // codexTestEnv harness. Skipped unless UZI_TEST_DATABASE_URL points at a throwaway Postgres; run
 // via ./e2e/run-store-it.sh. Every name ends LiveDB so the store-IT sweep selects it.
 
-// atomicSvc builds a Service over the live queries WITH the transaction beginner wired (the
-// live pool satisfies TxBeginner), so createRunAtomic opens a real transaction. The
-// fail-closed nil-txBeginner path is exercised by its own test with a beginner-less Service.
+// atomicSvc builds a fully initialized Service over the live queries WITH the transaction
+// beginner wired (the live pool satisfies TxBeginner), so createRunAtomic opens a real
+// transaction. The fail-closed nil-txBeginner path is exercised by its own test with a
+// beginner-less Service.
 func atomicSvc(env codexTestEnv) *Service {
-	return &Service{q: env.q, box: env.box, txBeginner: env.pool}
+	svc := New(env.q, env.box, testParams())
+	svc.txBeginner = env.pool
+	return svc
 }
 
 // manualIssueInsert returns a createRunAtomic insert closure shaped like a manual issue-run

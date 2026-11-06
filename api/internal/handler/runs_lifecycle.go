@@ -446,9 +446,9 @@ func (h *Handler) writeStartRunError(w http.ResponseWriter, r *http.Request, err
 	case errors.Is(err, workersvc.ErrCodexPoolUnavailable):
 		httpx.JSON(w, http.StatusUnprocessableEntity, codexPoolUnavailableBody())
 	case errors.Is(err, workersvc.ErrHostCodexSourceUnavailable):
-		httpx.JSON(w, http.StatusConflict, map[string]any{"error": "the selected worker-host Codex source is not ready", "code": "host_codex_source_unavailable"})
+		httpx.ErrorReason(w, http.StatusConflict, err.Error(), "host_codex_source_unavailable")
 	case errors.Is(err, workersvc.ErrHostCodexSourceAmbiguous):
-		httpx.JSON(w, http.StatusConflict, map[string]any{"error": "multiple worker-host Codex sources are ready; select one explicitly", "code": "host_codex_source_ambiguous"})
+		httpx.ErrorReason(w, http.StatusConflict, "multiple worker-host Codex sources are ready; select one explicitly", "host_codex_source_ambiguous")
 	case errors.Is(err, workersvc.ErrNoCredentialForHarness):
 		// PRD #1429 M2 (D2): an EXPLICIT harness (request or pin) whose credential is unusable —
 		// 422 with the stable no_credential_for_harness classification. Never falls back.

@@ -180,10 +180,10 @@ func TestOnDemandReworkRowTurnedLegacyDuringCreateIs409LiveDB(t *testing.T) {
 	}
 }
 
-func TestOnDemandReworkHostCodexDerivedRunUnsupportedLiveDB(t *testing.T) {
+func TestOnDemandReworkHostCodexSourceUnavailableLiveDB(t *testing.T) {
 	rig := newReworkRig(t, &settingsStore{}, time.Minute)
 	cliMustExec(t, rig.pool, `UPDATE runs
-		SET codex_credential_source_kind = 'worker_host', codex_credential_source_id = $2,
+		SET harness = 'codex', codex_credential_source_kind = 'worker_host', codex_credential_source_id = $2,
 		    codex_credential_source_revision = 1, codex_credential_source_worker_id = $3
 		WHERE id = $1`, rig.runID, uuid.NewString(), uuid.New())
 
@@ -191,10 +191,67 @@ func TestOnDemandReworkHostCodexDerivedRunUnsupportedLiveDB(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status %d body %s, want 409", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"reason":"host_codex_derived_run_unsupported"`) {
-		t.Fatalf("body %s, want host_codex_derived_run_unsupported reason", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"reason":"host_codex_source_unavailable"`) {
+		t.Fatalf("body %s, want host_codex_source_unavailable reason", rec.Body.String())
 	}
 	if rig.reworkRuns(t) != 0 {
-		t.Fatal("a rework run was created from a worker-host source")
+		t.Fatal("a rework run was created from an unavailable worker-host source")
+	}
+}
+
+func TestOnDemandReworkHostCodexSourceInheritedLiveDB(t *testing.T) {
+	rig := newReworkRig(t, &settingsStore{}, time.Minute)
+	workerID := uuid.New()
+	sourceID := uuid.NewString()
+	const revision int64 = 7
+	cliMustExec(t, rig.pool, `INSERT INTO workers
+		(id, user_id, name, token_hash, status, last_heartbeat_at, protocol_capabilities,
+		 codex_host_source_id, codex_host_source_revision, codex_host_source_ready)
+		VALUES ($1, $2, $3, $4, 'online', now(),
+		 ARRAY['codex_host_login_v1','codex_harness_v1','codex_runtime_v2'], $5, $6, true)`,
+		workerID, rig.user.ID, "host-source-"+workerID.String(), workerID[:], sourceID, revision)
+	cliMustExec(t, rig.pool, `UPDATE runs
+		SET harness = 'claude', codex_credential_source_kind = 'worker_host', codex_credential_source_id = $2,
+		    codex_credential_source_revision = $3, codex_credential_source_worker_id = $4
+		WHERE id = $1`, rig.runID, sourceID, revision, workerID)
+
+	rec := rig.post(t, `{"guidance":"please address this"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d body %s, want 201", rec.Code, rec.Body.String())
+	}
+	if rig.reworkRuns(t) != 1 {
+		t.Fatal("want one rework run")
+	}
+	type binding struct {
+		kind     string
+		id       string
+		revision int64
+		workerID uuid.UUID
+	}
+	readBinding := func(runID uuid.UUID) binding {
+		t.Helper()
+		var got binding
+		if err := rig.pool.QueryRow(context.Background(), `SELECT codex_credential_source_kind,
+			codex_credential_source_id, codex_credential_source_revision, codex_credential_source_worker_id
+			FROM runs WHERE id = $1`, runID).Scan(&got.kind, &got.id, &got.revision, &got.workerID); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	parent := readBinding(rig.runID)
+	var childID uuid.UUID
+	if err := rig.pool.QueryRow(context.Background(), `SELECT id FROM runs WHERE kind = 'mr_rework' AND target_run_id = $1`, rig.runID).Scan(&childID); err != nil {
+		t.Fatal(err)
+	}
+	child := readBinding(childID)
+	if child != parent {
+		t.Fatalf("child binding = %+v, want parent binding %+v", child, parent)
+	}
+	var childHarness string
+	if err := rig.pool.QueryRow(context.Background(), `SELECT harness FROM runs WHERE id = $1`, childID).Scan(&childHarness); err != nil {
+		t.Fatal(err)
+	}
+	if childHarness != "codex" {
+		t.Fatalf("child harness = %q, want codex despite claude parent", childHarness)
 	}
 }

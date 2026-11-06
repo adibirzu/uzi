@@ -67,6 +67,10 @@ var ErrActiveFixExists = errors.New("an active CI-fix run already exists for thi
 // ref's branch/worktree (the cross-kind same-branch exclusion). Mapped to 409.
 var ErrBranchInUse = errors.New("an active run already occupies this branch")
 
+// ErrCIFixBranchParentChanged is a retryable conflict: the latest same-user
+// branch parent changed after CI-fix selected its credential-resolution lane.
+var ErrCIFixBranchParentChanged = errors.New("the branch parent changed while this CI-fix request ran; try again")
+
 // FailureSnapshot is the frozen record of the failed pipeline a ci_fix run works
 // from (PRD #6). It is captured at queue time — the pipeline_statuses cache row is
 // overwritten by later syncs, so the run must carry its own copy — stored as
@@ -180,16 +184,28 @@ func (s *Service) createCIFixRun(ctx context.Context, userID, repoID uuid.UUID, 
 	if err := s.guardDefaultBranch(ctx, row); err != nil {
 		return store.Run{}, err
 	}
-	// A CI fix is derived work for the failed branch. Worker-host Codex credentials
-	// belong solely to their bound worker, so never re-resolve this as a server-held
-	// credential. This read is repeated in the create transaction below to close the
-	// branch-link race.
-	hostBound, err := s.q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}})
-	if err != nil {
-		return store.Run{}, err
-	}
-	if hostBound {
-		return store.Run{}, ErrHostCodexDerivedRunUnsupported
+	// Read the current parent to choose the resolver lane. It is read again after
+	// LockRunBranch below, closing the branch-link race before the insert.
+	parent, parentErr := s.q.GetWorkerHostCodexRunForBranch(ctx, store.GetWorkerHostCodexRunForBranchParams{RepoID: repoID, UserID: userID, Branch: pgtype.Text{String: ref, Valid: true}})
+	var expectedParent *uuid.UUID
+	if parentErr == nil {
+		expectedParent = &parent.ID
+		if parent.CodexCredentialSourceKind.Valid && parent.CodexCredentialSourceKind.String == "worker_host" {
+			ctx, err = inheritHostCodexSource(ctx, parent)
+			if err != nil {
+				return store.Run{}, err
+			}
+		} else {
+			hostBound, e := s.q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{RepoID: repoID, UserID: userID, Branch: pgtype.Text{String: ref, Valid: true}})
+			if e != nil {
+				return store.Run{}, e
+			}
+			if hostBound {
+				return store.Run{}, ErrHostCodexDerivedRunUnsupported
+			}
+		}
+	} else if !errors.Is(parentErr, pgx.ErrNoRows) {
+		return store.Run{}, parentErr
 	}
 
 	snapJSON, err := json.Marshal(snapshot)
@@ -202,19 +218,31 @@ func (s *Service) createCIFixRun(ctx context.Context, userID, repoID uuid.UUID, 
 	// PRD #1429 M2: CI-fix has no reliable target run, so it uses IMPLICIT D11 (nil explicit) — the
 	// resolve + freeze commit atomically with the INSERT.
 	run, err := s.createRunResolved(ctx, userID, nil /*explicit: implicit D11*/, func(q Store, resolved resolvedHarness) (store.Run, error) {
-		hostBound, err := q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{RepoID: repoID, Branch: pgtype.Text{String: ref, Valid: true}})
-		if err != nil {
-			return store.Run{}, err
-		}
-		if hostBound {
-			return store.Run{}, ErrHostCodexDerivedRunUnsupported
-		}
 		// Cross-kind same-branch exclusion (PRD #6, issue #1626), inside the create transaction
 		// and after the run-branch lock, so it serializes against an issue / mr_rework create on
 		// the same ref (they take the same (repo, ref) key; see store.RunBranchLockClass). The
 		// waiter's checks are new READ COMMITTED statements and see the holder's committed row.
 		if err := q.LockRunBranch(ctx, repoID, ref); err != nil {
 			return store.Run{}, err
+		}
+		// The first parent lookup selects the pre-insert resolution lane; this
+		// locked reread makes that choice stable. A changed parent refuses rather
+		// than letting an old host binding degrade into ordinary D11 resolution.
+		fresh, e := q.GetWorkerHostCodexRunForBranch(ctx, store.GetWorkerHostCodexRunForBranchParams{RepoID: repoID, UserID: userID, Branch: pgtype.Text{String: ref, Valid: true}})
+		if e != nil && !errors.Is(e, pgx.ErrNoRows) {
+			return store.Run{}, e
+		}
+		if (expectedParent == nil && e == nil) || (expectedParent != nil && (e != nil || fresh.ID != *expectedParent)) {
+			return store.Run{}, ErrCIFixBranchParentChanged
+		}
+		if e == nil && (!fresh.CodexCredentialSourceKind.Valid || fresh.CodexCredentialSourceKind.String != "worker_host") {
+			hostBound, e := q.HasWorkerHostCodexRunForBranch(ctx, store.HasWorkerHostCodexRunForBranchParams{RepoID: repoID, UserID: userID, Branch: pgtype.Text{String: ref, Valid: true}})
+			if e != nil {
+				return store.Run{}, e
+			}
+			if hostBound {
+				return store.Run{}, ErrHostCodexDerivedRunUnsupported
+			}
 		}
 		// Any ref: refuse a fix on a ref an active run already holds as runs.branch (a task
 		// run's branch). The uq_runs_one_active_ci_fix index cannot express this.

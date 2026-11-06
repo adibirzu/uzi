@@ -579,8 +579,8 @@ func TestTaskDerivedRunCreatorsRejectWorkerHostSource(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := &fakeStore{runByIDPlain: hostParent}
 			err := tc.call(New(fs, newBox(t), testParams()))
-			if !errors.Is(err, ErrHostCodexDerivedRunUnsupported) {
-				t.Fatalf("error = %v, want ErrHostCodexDerivedRunUnsupported", err)
+			if !errors.Is(err, ErrHostCodexSourceUnavailable) {
+				t.Fatalf("error = %v, want ErrHostCodexSourceUnavailable", err)
 			}
 			if fs.taskReviewRunParams != nil || fs.thenFixRunParams != nil {
 				t.Fatal("derived run was inserted despite worker-host source")

@@ -640,6 +640,255 @@ func (q *Queries) FindCIFixStampTarget(ctx context.Context, arg FindCIFixStampTa
 	return i, err
 }
 
+const getWorkerHostCodexRunForBranch = `-- name: GetWorkerHostCodexRunForBranch :one
+SELECT id, user_id, repo_id, issue_iid, issue_title, issue_description, status, requeue_count, worker_id, session_id, last_seq, branch, mr_iid, failure_reason, plan_md, iteration_count, claimed_at, started_at, finished_at, created_at, updated_at, origin_column, board_column, move_pending_since, mr_state, auto_approve, autopilot_commented_at, kind, pipeline_id, pipeline_ref, failure_snapshot, fix_verdict, stop_kind, agent_source, agent_exclusions, repo_agents, title, resume_of_run_id, last_activity_at, health, health_reason, health_since, health_notified_at, target_run_id, mr_web_url, prd_done_path, prd_patch_settled_at, anthropic_secret_id, anthropic_secret_label, anthropic_select_reason, anthropic_headroom_pct, wait_on_limit, limit_resets_at, retry_not_before, limit_wait_count, rate_limit_type, open_question_id, revise_count, plan_source, planned_base_commit, require_base_match, milestones_candidate, milestones_frozen, milestones_completed, milestones_in_progress, budget_max_iterations, budget_wall_seconds, schedule_id, limit_dead_secret_id, report_only, report_md, ci_config_paths, model, override_subagent_model, fail_origin, priority, summary_intent, summary_plan, summary_deltas, issue_comments, base_branch, open_mr, dispatched_at, review_target_run_id, review_requested, then_fix_requested, then_fix_of_run_id, preserved_patch, required_capabilities, stop_reason, required_tools, size_class, interactive, open_followup_id, plan_changed_files, scope_ceiling, status_since, review_comments, budget_paused_seconds, mr_rework_enabled, trigger_source, checkpoint_tip, usage_refolded, codex_secret_id, codex_auth_mode, codex_secret_label, codex_account_key, codex_material_revision, codex_account_revision, codex_claim_epoch, codex_cap_hash, pause_requested_at, pause_mode, pause_after_count, checkpoint_tip_at, recovery_wait_count, recovery_retry_not_before, completion_contract_version, contract_revision, completion_contract, completion_attempts, latest_completion_attempt, milestones_agents, hold_reason, hold_captured_head, completion_budget_exhausted_at, completion_question_at, budget_extension_seconds, claim_generation, harness, recovery_wait_cause, forge_park_count, credential_override_mode, credential_override_secret_id, claim_released_at, credential_switch_requested_at, credential_switch_generation, stale_requeue_generation, budget_finalize_seconds, released_worker_id, released_worker_nonce, gate_revision, gate_presentation_id, gate_presented_payload, gate_payload_digest, gate_refusal_count, gate_refusal_generation, disk_park_count, checkpoint_contains_latest, egress_profile_id, egress_snapshot, job_type, finalize_resume_generation, job_protocol, first_started_at, plan_cross_check_required, plan_cross_check_gate_reason, issue_raw_digest, issue_saved_body, issue_input_reason, auto_approve_blocked_reasons, plan_cross_check_diff_refusal, worker_recovery_episode, requeue_episode_baseline, worker_recovery_evidence, cross_check_lane, cross_check_lane_generation, completion_final_head, code_cross_check_required, provider_park_count, provider_park_streak_started_at, ci_config_guard, memory_episode, memory_intervention_count, memory_policy, completion_non_closing_reason, ci_artifact_manifest, checkpoint_attested_source, source_publication_intent, continued_issue_iid, checkpoint_coordinates, retained_park_count, ignored_inferred_capabilities, reserve_hold_reason, reserve_exempt_until, reserve_exempt_granted_at, reserve_exempt_credential_id, reserve_exempt_window_reset, reserve_exempt_prior_pct, hinted_capabilities, capability_inference_evidence, idle_stall_park_count, forge_admission, codex_select_reason, recovery_wait_phase, plan_cross_check_gated, policy_preserve_required, policy_pending_fresh, policy_outcome_id, policy_continuation_mode, policy_resolved_at, policy_applying_worker_id, policy_applying_generation, policy_source_generation, policy_refusal_count, policy_refusal_tag, policy_refusal_phase, policy_refusal_correlation_id, policy_hold_published, harness_preferred, harness_decision_reason, harness_preferred_score, harness_other_score, harness_preferred_measured, harness_other_measured, harness_preferred_held, harness_other_held, harness_preferred_weekly_reset_at, harness_other_weekly_reset_at, codex_credential_source_kind, codex_credential_source_id, codex_credential_source_revision, codex_credential_source_worker_id FROM runs
+WHERE repo_id = $1::uuid
+  AND user_id = $2::uuid
+  AND branch = $3
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+`
+
+type GetWorkerHostCodexRunForBranchParams struct {
+	RepoID uuid.UUID   `json:"repo_id"`
+	UserID uuid.UUID   `json:"user_id"`
+	Branch pgtype.Text `json:"branch"`
+}
+
+// A CI fix derives from the latest run on its failed branch for the same owner.
+// The caller inherits only when that latest parent is worker_host; an older host
+// binding below a newer non-host parent retains the historical typed refusal.
+func (q *Queries) GetWorkerHostCodexRunForBranch(ctx context.Context, arg GetWorkerHostCodexRunForBranchParams) (Run, error) {
+	row := q.db.QueryRow(ctx, getWorkerHostCodexRunForBranch, arg.RepoID, arg.UserID, arg.Branch)
+	var i Run
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RepoID,
+		&i.IssueIid,
+		&i.IssueTitle,
+		&i.IssueDescription,
+		&i.Status,
+		&i.RequeueCount,
+		&i.WorkerID,
+		&i.SessionID,
+		&i.LastSeq,
+		&i.Branch,
+		&i.MrIid,
+		&i.FailureReason,
+		&i.PlanMd,
+		&i.IterationCount,
+		&i.ClaimedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OriginColumn,
+		&i.BoardColumn,
+		&i.MovePendingSince,
+		&i.MrState,
+		&i.AutoApprove,
+		&i.AutopilotCommentedAt,
+		&i.Kind,
+		&i.PipelineID,
+		&i.PipelineRef,
+		&i.FailureSnapshot,
+		&i.FixVerdict,
+		&i.StopKind,
+		&i.AgentSource,
+		&i.AgentExclusions,
+		&i.RepoAgents,
+		&i.Title,
+		&i.ResumeOfRunID,
+		&i.LastActivityAt,
+		&i.Health,
+		&i.HealthReason,
+		&i.HealthSince,
+		&i.HealthNotifiedAt,
+		&i.TargetRunID,
+		&i.MrWebUrl,
+		&i.PrdDonePath,
+		&i.PrdPatchSettledAt,
+		&i.AnthropicSecretID,
+		&i.AnthropicSecretLabel,
+		&i.AnthropicSelectReason,
+		&i.AnthropicHeadroomPct,
+		&i.WaitOnLimit,
+		&i.LimitResetsAt,
+		&i.RetryNotBefore,
+		&i.LimitWaitCount,
+		&i.RateLimitType,
+		&i.OpenQuestionID,
+		&i.ReviseCount,
+		&i.PlanSource,
+		&i.PlannedBaseCommit,
+		&i.RequireBaseMatch,
+		&i.MilestonesCandidate,
+		&i.MilestonesFrozen,
+		&i.MilestonesCompleted,
+		&i.MilestonesInProgress,
+		&i.BudgetMaxIterations,
+		&i.BudgetWallSeconds,
+		&i.ScheduleID,
+		&i.LimitDeadSecretID,
+		&i.ReportOnly,
+		&i.ReportMd,
+		&i.CiConfigPaths,
+		&i.Model,
+		&i.OverrideSubagentModel,
+		&i.FailOrigin,
+		&i.Priority,
+		&i.SummaryIntent,
+		&i.SummaryPlan,
+		&i.SummaryDeltas,
+		&i.IssueComments,
+		&i.BaseBranch,
+		&i.OpenMr,
+		&i.DispatchedAt,
+		&i.ReviewTargetRunID,
+		&i.ReviewRequested,
+		&i.ThenFixRequested,
+		&i.ThenFixOfRunID,
+		&i.PreservedPatch,
+		&i.RequiredCapabilities,
+		&i.StopReason,
+		&i.RequiredTools,
+		&i.SizeClass,
+		&i.Interactive,
+		&i.OpenFollowupID,
+		&i.PlanChangedFiles,
+		&i.ScopeCeiling,
+		&i.StatusSince,
+		&i.ReviewComments,
+		&i.BudgetPausedSeconds,
+		&i.MrReworkEnabled,
+		&i.TriggerSource,
+		&i.CheckpointTip,
+		&i.UsageRefolded,
+		&i.CodexSecretID,
+		&i.CodexAuthMode,
+		&i.CodexSecretLabel,
+		&i.CodexAccountKey,
+		&i.CodexMaterialRevision,
+		&i.CodexAccountRevision,
+		&i.CodexClaimEpoch,
+		&i.CodexCapHash,
+		&i.PauseRequestedAt,
+		&i.PauseMode,
+		&i.PauseAfterCount,
+		&i.CheckpointTipAt,
+		&i.RecoveryWaitCount,
+		&i.RecoveryRetryNotBefore,
+		&i.CompletionContractVersion,
+		&i.ContractRevision,
+		&i.CompletionContract,
+		&i.CompletionAttempts,
+		&i.LatestCompletionAttempt,
+		&i.MilestonesAgents,
+		&i.HoldReason,
+		&i.HoldCapturedHead,
+		&i.CompletionBudgetExhaustedAt,
+		&i.CompletionQuestionAt,
+		&i.BudgetExtensionSeconds,
+		&i.ClaimGeneration,
+		&i.Harness,
+		&i.RecoveryWaitCause,
+		&i.ForgeParkCount,
+		&i.CredentialOverrideMode,
+		&i.CredentialOverrideSecretID,
+		&i.ClaimReleasedAt,
+		&i.CredentialSwitchRequestedAt,
+		&i.CredentialSwitchGeneration,
+		&i.StaleRequeueGeneration,
+		&i.BudgetFinalizeSeconds,
+		&i.ReleasedWorkerID,
+		&i.ReleasedWorkerNonce,
+		&i.GateRevision,
+		&i.GatePresentationID,
+		&i.GatePresentedPayload,
+		&i.GatePayloadDigest,
+		&i.GateRefusalCount,
+		&i.GateRefusalGeneration,
+		&i.DiskParkCount,
+		&i.CheckpointContainsLatest,
+		&i.EgressProfileID,
+		&i.EgressSnapshot,
+		&i.JobType,
+		&i.FinalizeResumeGeneration,
+		&i.JobProtocol,
+		&i.FirstStartedAt,
+		&i.PlanCrossCheckRequired,
+		&i.PlanCrossCheckGateReason,
+		&i.IssueRawDigest,
+		&i.IssueSavedBody,
+		&i.IssueInputReason,
+		&i.AutoApproveBlockedReasons,
+		&i.PlanCrossCheckDiffRefusal,
+		&i.WorkerRecoveryEpisode,
+		&i.RequeueEpisodeBaseline,
+		&i.WorkerRecoveryEvidence,
+		&i.CrossCheckLane,
+		&i.CrossCheckLaneGeneration,
+		&i.CompletionFinalHead,
+		&i.CodeCrossCheckRequired,
+		&i.ProviderParkCount,
+		&i.ProviderParkStreakStartedAt,
+		&i.CiConfigGuard,
+		&i.MemoryEpisode,
+		&i.MemoryInterventionCount,
+		&i.MemoryPolicy,
+		&i.CompletionNonClosingReason,
+		&i.CiArtifactManifest,
+		&i.CheckpointAttestedSource,
+		&i.SourcePublicationIntent,
+		&i.ContinuedIssueIid,
+		&i.CheckpointCoordinates,
+		&i.RetainedParkCount,
+		&i.IgnoredInferredCapabilities,
+		&i.ReserveHoldReason,
+		&i.ReserveExemptUntil,
+		&i.ReserveExemptGrantedAt,
+		&i.ReserveExemptCredentialID,
+		&i.ReserveExemptWindowReset,
+		&i.ReserveExemptPriorPct,
+		&i.HintedCapabilities,
+		&i.CapabilityInferenceEvidence,
+		&i.IdleStallParkCount,
+		&i.ForgeAdmission,
+		&i.CodexSelectReason,
+		&i.RecoveryWaitPhase,
+		&i.PlanCrossCheckGated,
+		&i.PolicyPreserveRequired,
+		&i.PolicyPendingFresh,
+		&i.PolicyOutcomeID,
+		&i.PolicyContinuationMode,
+		&i.PolicyResolvedAt,
+		&i.PolicyApplyingWorkerID,
+		&i.PolicyApplyingGeneration,
+		&i.PolicySourceGeneration,
+		&i.PolicyRefusalCount,
+		&i.PolicyRefusalTag,
+		&i.PolicyRefusalPhase,
+		&i.PolicyRefusalCorrelationID,
+		&i.PolicyHoldPublished,
+		&i.HarnessPreferred,
+		&i.HarnessDecisionReason,
+		&i.HarnessPreferredScore,
+		&i.HarnessOtherScore,
+		&i.HarnessPreferredMeasured,
+		&i.HarnessOtherMeasured,
+		&i.HarnessPreferredHeld,
+		&i.HarnessOtherHeld,
+		&i.HarnessPreferredWeeklyResetAt,
+		&i.HarnessOtherWeeklyResetAt,
+		&i.CodexCredentialSourceKind,
+		&i.CodexCredentialSourceID,
+		&i.CodexCredentialSourceRevision,
+		&i.CodexCredentialSourceWorkerID,
+	)
+	return i, err
+}
+
 const hasActiveIssueRunForIID = `-- name: HasActiveIssueRunForIID :one
 SELECT EXISTS (
     SELECT 1 FROM runs
@@ -669,20 +918,22 @@ const hasWorkerHostCodexRunForBranch = `-- name: HasWorkerHostCodexRunForBranch 
 SELECT EXISTS (
     SELECT 1 FROM runs
     WHERE repo_id = $1::uuid
-      AND branch = $2
+      AND user_id = $2::uuid
+      AND branch = $3
       AND codex_credential_source_kind = 'worker_host'
 ) AS host_bound
 `
 
 type HasWorkerHostCodexRunForBranchParams struct {
 	RepoID uuid.UUID   `json:"repo_id"`
+	UserID uuid.UUID   `json:"user_id"`
 	Branch pgtype.Text `json:"branch"`
 }
 
 // CI fixes are derived work on a failed MR branch. A worker-host Codex binding is
 // non-transferable, so that branch cannot resolve a server-held credential.
 func (q *Queries) HasWorkerHostCodexRunForBranch(ctx context.Context, arg HasWorkerHostCodexRunForBranchParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasWorkerHostCodexRunForBranch, arg.RepoID, arg.Branch)
+	row := q.db.QueryRow(ctx, hasWorkerHostCodexRunForBranch, arg.RepoID, arg.UserID, arg.Branch)
 	var host_bound bool
 	err := row.Scan(&host_bound)
 	return host_bound, err

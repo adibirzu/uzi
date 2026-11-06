@@ -247,8 +247,8 @@ func adviceClaim(gen *int64, runID *string) (workersvc.AdviceClaim, error) {
 //     which the worker reads to abandon the old flight rather than fail the run.
 func writeAdviceClaimRefusal(w http.ResponseWriter, err error) bool {
 	switch {
-	case errors.Is(err, workersvc.ErrHostCodexDerivedRunUnsupported):
-		httpx.ErrorReason(w, http.StatusConflict, err.Error(), "host_codex_derived_run_unsupported")
+	case errors.Is(err, workersvc.ErrHostCodexSourceUnavailable):
+		httpx.ErrorReason(w, http.StatusConflict, err.Error(), "host_codex_source_unavailable")
 	case errors.Is(err, workersvc.ErrMissingClaimGeneration):
 		httpx.Error(w, http.StatusConflict, "an advice_claim_fence_v1 worker must stamp claim_generation and advice_run_id on every advice post")
 	case errors.Is(err, workersvc.ErrStaleClaim):

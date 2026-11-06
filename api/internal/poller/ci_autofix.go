@@ -307,6 +307,10 @@ func (d *CIAutoFix) detectOne(ctx context.Context, r store.ListEnabledReposWithC
 		// A race with the manual Fix-CI button (or an issue run on the branch), or a
 		// permanent host-Codex derived-run refusal: swallow, no comment, no counter advance.
 		d.recordPipeline(ctx, r, ref, cand.PipelineID)
+	case errors.Is(err, workersvc.ErrHostCodexSourceUnavailable):
+		// The source may become ready on a later poll, so leave the pipeline unrecorded
+		// for retry, but avoid treating this expected host-Codex state as an error.
+		slog.Warn("poller: ci-autofix host Codex source unavailable", "repo", r.PathWithNamespace, "ref", ref)
 	default:
 		// ErrRepoNotFound / a transient DB error: leave unrecorded so the next tick retries.
 		slog.Error("poller: ci-autofix create run", "repo", r.PathWithNamespace, "ref", ref, "error", err)
