@@ -143,31 +143,13 @@ func TestHostInheritExactWorkerAndAvailabilityLiveDB(t *testing.T) {
 // TestHostInheritIncompleteAndCIFixOwnershipLiveDB pins fail-closed incomplete parents,
 // latest-parent CI selection, and same-branch cross-user isolation.
 func TestHostInheritIncompleteAndCIFixOwnershipLiveDB(t *testing.T) {
-	t.Run("incomplete_never_falls_back", func(t *testing.T) {
-		f := newHostInheritanceFixture(t)
-		seedAnthropicToken(t, f.env, f.userID)
-		alias := f.env.seedStaticAPIKey(t, f.userID, "server", codexToken("sk"))
-		makeCodexDefault(t, f.env, alias)
-		parent := f.parent(t, "task", "uzi/task/"+uuid.NewString())
-		f.env.exec(`UPDATE runs SET codex_credential_source_worker_id=NULL WHERE id=$1`, parent)
-		_, err := atomicSvc(f.env).CreateTaskReviewRun(f.env.ctx, f.userID, f.repoID, parent, "uzi/task/"+uuid.NewString(), "main", HarnessCodex)
-		if !errors.Is(err, ErrHostCodexSourceUnavailable) {
-			t.Fatalf("err=%v", err)
-		}
-		var n int
-		if err := f.env.pool.QueryRow(f.env.ctx, `SELECT count(*) FROM runs WHERE review_target_run_id=$1`, parent).Scan(&n); err != nil {
-			t.Fatalf("count children: %v", err)
-		}
-		if n != 0 {
-			t.Fatalf("fallback inserted %d children", n)
-		}
-	})
 	for _, tc := range []struct {
 		name   string
-		setBad string
+		source HostCodexSource
 	}{
-		{"null_source_id", "codex_credential_source_id=NULL"},
-		{"zero_revision", "codex_credential_source_revision=0"},
+		{"empty_source_id", HostCodexSource{Inherited: true}},
+		{"zero_revision", HostCodexSource{ID: "host-" + uuid.NewString(), Inherited: true}},
+		{"nil_worker_id", HostCodexSource{ID: "host-" + uuid.NewString(), Revision: 7, Inherited: true}},
 	} {
 		t.Run("incomplete_"+tc.name+"_never_falls_back", func(t *testing.T) {
 			f := newHostInheritanceFixture(t)
@@ -175,8 +157,10 @@ func TestHostInheritIncompleteAndCIFixOwnershipLiveDB(t *testing.T) {
 			alias := f.env.seedStaticAPIKey(t, f.userID, "server", codexToken("sk"))
 			makeCodexDefault(t, f.env, alias)
 			parent := f.parent(t, "task", "uzi/task/"+uuid.NewString())
-			f.env.exec("UPDATE runs SET "+tc.setBad+" WHERE id=$1", parent)
-			_, err := atomicSvc(f.env).CreateTaskReviewRun(f.env.ctx, f.userID, f.repoID, parent, "uzi/task/"+uuid.NewString(), "main", HarnessCodex)
+			f.env.exec(`UPDATE runs SET codex_credential_source_kind=NULL, codex_credential_source_id=NULL,
+				codex_credential_source_revision=NULL, codex_credential_source_worker_id=NULL WHERE id=$1`, parent)
+			ctx := WithHostCodexSource(f.env.ctx, tc.source)
+			_, err := atomicSvc(f.env).CreateTaskReviewRun(ctx, f.userID, f.repoID, parent, "uzi/task/"+uuid.NewString(), "main", HarnessCodex)
 			if !errors.Is(err, ErrHostCodexSourceUnavailable) {
 				t.Fatalf("err=%v, want ErrHostCodexSourceUnavailable", err)
 			}
