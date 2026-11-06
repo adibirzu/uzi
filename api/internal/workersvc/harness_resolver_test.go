@@ -1,8 +1,11 @@
 package workersvc
 
 import (
+	"context"
 	"errors"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // harness_resolver_test.go pins the PURE D11 resolver (PRD #1332 D4). It is
@@ -137,6 +140,46 @@ func TestResolveHarness(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Fatalf("harness = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInheritedHostCodexHarness(t *testing.T) {
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		fallback Harness
+		want     Harness
+	}{
+		{
+			name: "inherited source forces codex",
+			ctx: WithHostCodexSource(context.Background(), HostCodexSource{
+				ID: "host-source", Revision: 7, WorkerID: uuid.New(), Inherited: true,
+			}),
+			fallback: HarnessClaude,
+			want:     HarnessCodex,
+		},
+		{
+			name: "user selected source keeps fallback",
+			ctx: WithHostCodexSource(context.Background(), HostCodexSource{
+				ID: "host-source", Revision: 7, WorkerID: uuid.New(),
+			}),
+			fallback: HarnessClaude,
+			want:     HarnessClaude,
+		},
+		{
+			name:     "no source keeps fallback",
+			ctx:      context.Background(),
+			fallback: HarnessClaude,
+			want:     HarnessClaude,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := inheritedHostCodexHarness(tt.ctx, tt.fallback); got != tt.want {
+				t.Fatalf("inheritedHostCodexHarness() = %q, want %q", got, tt.want)
 			}
 		})
 	}

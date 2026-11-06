@@ -211,7 +211,7 @@ func TestOnDemandReworkHostCodexSourceInheritedLiveDB(t *testing.T) {
 		 ARRAY['codex_host_login_v1','codex_harness_v1','codex_runtime_v2'], $5, $6, true)`,
 		workerID, rig.user.ID, "host-source-"+workerID.String(), workerID[:], sourceID, revision)
 	cliMustExec(t, rig.pool, `UPDATE runs
-		SET harness = 'codex', codex_credential_source_kind = 'worker_host', codex_credential_source_id = $2,
+		SET harness = 'claude', codex_credential_source_kind = 'worker_host', codex_credential_source_id = $2,
 		    codex_credential_source_revision = $3, codex_credential_source_worker_id = $4
 		WHERE id = $1`, rig.runID, sourceID, revision, workerID)
 
@@ -246,5 +246,12 @@ func TestOnDemandReworkHostCodexSourceInheritedLiveDB(t *testing.T) {
 	child := readBinding(childID)
 	if child != parent {
 		t.Fatalf("child binding = %+v, want parent binding %+v", child, parent)
+	}
+	var childHarness string
+	if err := rig.pool.QueryRow(context.Background(), `SELECT harness FROM runs WHERE id = $1`, childID).Scan(&childHarness); err != nil {
+		t.Fatal(err)
+	}
+	if childHarness != "codex" {
+		t.Fatalf("child harness = %q, want codex despite claude parent", childHarness)
 	}
 }
